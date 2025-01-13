@@ -1,6 +1,6 @@
 # transport-mode-classification
 
-![transporte](https://github.com/AndreaTJ/Tech-Girls-Glovo/raw/main/docs/banner-madrid.jpg)
+![transporte](https://github.com/neiluz/transport-mode-classification/blob/main/docs/project_8.jpg)
 
 ## **Índice**
 - [Introducción](#introducción)
@@ -127,5 +127,11 @@ Este apartado incluirá las observaciones clave y lecciones aprendidas una vez f
 ## **Instrucciones de Uso**
 > **Estado:** En progreso.
 
+---
+
+## **Licencia**
+Este proyecto está bajo la licencia MIT. Puedes ver los detalles de la licencia en el archivo [LICENSE](LICENSE).
+
+---
 ## Integrantes del Grupo:
 > **Estado:** En progreso.
