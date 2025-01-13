@@ -59,6 +59,7 @@ Los datos disponibles contienen registros de los siguientes sensores y variables
 ### 2. Desarrollo del modelo:
 
 - Entrenamiento de un modelo de clasificación utilizando SVM con diferentes kernels (lineal, radial, polinómico, sigmoide).
+- Identificación de las mejores variables mediante **Random Forest** como caso a evaluar.
 - Fine-tuning de hiperparámetros mediante búsqueda en malla (Grid Search).
 
 ### 3. Validación del modelo:
