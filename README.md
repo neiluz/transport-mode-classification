@@ -54,7 +54,7 @@ Los datos disponibles contienen registros de los siguientes sensores y variables
 ### 1. Preparación de los datos:
 
 - Selección de un subconjunto de datos al azar para evitar redundancia y reducir el tamaño del conjunto.
-- Preprocesamiento, incluyendo manejo de valores nulos, normalización y creación de nuevas variables derivadas (e.g., magnitud de aceleración, velocidad angular total).
+- Preprocesamiento, incluyendo manejo de valores nulos, normalización y creación de nuevas variables derivadas si fuese necesario.
 
 ### 2. Desarrollo del modelo:
 
