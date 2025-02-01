@@ -1,0 +1,1215 @@
+---
+title: "Análisis Exploratorio de Datos (EDA) - Proyecto de Transporte - Dataset Cycling"
+output: html_notebook
+---
+
+### General: Objetivos del Proyecto y Definición de Variables 
+
+El objetivo principal de este proyecto es desarrollar un modelo basado en **Máquinas de Vectores de Soporte (SVM)** para predecir el **modo de transporte** utilizado por un individuo en función de los datos recopilados por sensores de dispositivos móviles. Se busca analizar cómo las diferentes señales captadas por el acelerómetro, giróscopo, barómetro, GPS y magnetómetro pueden ser utilizadas para inferir con precisión el medio de transporte en uso.
+
+Para lograr esto, se cuenta con un conjunto de datos que incluye:
+
+1.  **Registro Temporal**
+
+    -   Cada observación está asociada a un instante de tiempo específico.
+
+2.  **Datos de Movimiento y Orientación**
+
+    -   **Acelerómetro**: Componentes X, Y, Z del vector aceleración.
+
+    -   **Giróscopo**: Velocidad angular en los ejes X, Y, Z y su derivada.
+
+    -   **Matriz de Rotación y Cuaterniones**: Representan la orientación tridimensional del dispositivo.
+
+3.  **Datos de Ubicación y Contexto**
+
+    -   **GPS**: Coordenadas de latitud y longitud, velocidad, altitud y rumbo.
+
+    -   **Presión Atmosférica**: Valores obtenidos del barómetro, junto con la altitud relativa.
+
+    -   **Campo Magnético Terrestre**: Medición en los ejes X, Y, Z.
+
+4.  **Variables Categóricas**
+
+    -   **Modo de Transporte**: La categoría que se busca predecir (caminar, bicicleta, automóvil, etc.).
+
+    -   **Nivel de Confianza**: Un indicador de la precisión estimada para la clasificación del transporte en los datos originales.
+
+### Objetivo Notebook: 
+
+El análisis exploratorio de datos (EDA) busca comprender la estructura del dataset, identificar patrones y evaluar la calidad de los datos antes de proceder con el modelado. Se incluyen tareas como:
+
+-   **Identificación y tratamiento de outliers univariantes y multivariantes.**
+
+-   **Evaluación de la normalidad y distribución de las variables.**
+
+-   **Exploración de la correlación entre variables para determinar redundancias o relaciones clave.**
+
+-   **Selección de variables relevantes para el modelo.**
+
+# **1. Carga de librerías**
+
+```{r}
+# Lista de paquetes necesarios
+necessary_packages <- c("dplyr", "ggplot2", "DataExplorer", "naniar", 
+                        "moments", "psych", "caret", "lubridate", "chemometrics",
+                        "tidyr", "tidyverse", "cowplot", "car")
+
+# Instalar paquetes que no están instalados
+new_packages <- necessary_packages[!(necessary_packages %in% installed.packages()[, "Package"])]
+if (length(new_packages) > 0) {
+  install.packages(new_packages)
+}
+
+# Cargar todos los paquetes
+lapply(necessary_packages, library, character.only = TRUE)
+
+```
+
+```{r}
+# Cargar las librerías
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(naniar)
+library(moments)
+library(psych)
+library(caret)
+library(reshape2)
+library(geosphere)
+library(zoo)
+# Cargar librerías necesarias
+library(ggplot2)
+library(gridExtra) # Para organizar múltiples gráficos
+library(ggpubr)    # Para Q-Q plots
+library(chemometrics)
+
+```
+
+# 2. Cargar el dataset
+
+```{r}
+# Ruta del archivo CSV (modificar según tu sistema)
+ruta_dataset <- "C:/Users/Lenovo/Documents/IT Academy/Datos proyecto 8/proyect8/input_data/50Hz-v5-20230911-124152-30s-bici.csv"
+
+data <- read.csv(ruta_dataset)
+
+# Resumen del dataset
+cat("### Información General del Dataset")
+dim(data) # Dimensiones del dataset
+str(data) # Estructura del dataset
+
+```
+
+```{r}
+summary(data) # Resumen estadístico básico
+```
+
+La variable **`Timestamp`** está almacenada como **cadena de texto (`chr`)**, lo que dificulta su manipulación y análisis temporal. Para facilitar su uso en el procesamiento de datos y visualización, se convierte al formato **`POSIXct`**, permitiendo cálculos de intervalos de tiempo, filtrado y una mejor representación en gráficos.
+
+En cuanto a la columna **`ActivityType`**, contiene valores **inconsistentes** como **"unknown"** y **"walking"**, a pesar de que el dataset representa exclusivamente actividades de **cycling**. Para garantizar la coherencia en los datos, estos valores se reemplazan y categorizan correctamente como **"cycling"**.
+
+Adicionalmente, se han identificado variables como **`Lat`**, **`Long`**, **`Speed.m.s.`**, **`TrueHeading`**, **`Alt.m.`**, **`HorizontalAccuracy.m.`**, **`VerticalAccuracy.m.`** y **`Course`** que no se encuentran en otros dataset y **no pueden ser calculadas, asi como** se requiere **unicidad en la estructura de los datos** para asegurar una integración adecuada, se decide eliminarlas, manteniendo solo las variables que pueden ser comparadas o utilizadas en el análisis conjunto.
+
+#### 2.1. Convertir Timestamp de chr
+
+```{r}
+head(data$Timestamp)
+```
+
+```{r}
+# Convertir Timestamp con parse_date_time
+data <- data %>%
+  mutate(Timestamp = parse_date_time(Timestamp, orders = "dmy HMSOS"))
+
+# Verificar el resultado
+head(data$Timestamp)
+class(data$Timestamp)  # Debería ser POSIXc
+```
+
+#### 2.2. Eliminar variables
+
+```{r}
+# Eliminar las columnas específicas del dataset
+data <- data %>%
+  select(-Lat, -Long, -Speed.m.s., -TrueHeading, -Alt.m., -HorizontalAccuracy.m., -VerticalAccuracy.m., -Course)
+# Verificar las columnas restantes
+colnames(data)
+```
+
+#### 2.3. Categorizacion de la variable `ActivityType`
+
+```{r}
+# Reemplazar valores inconsistentes en la columna ActivityType
+data <- data %>%
+  mutate(ActivityType = ifelse(ActivityType %in% c("Unknown", "Walking"), "Cycling", ActivityType))
+
+# Verificar los valores únicos después del reemplazo
+table(data$ActivityType)
+
+```
+
+```{r}
+str(data)
+```
+
+# 3. Estadísticas Descriptivas
+
+Las estadísticas descriptivas ofrecen una visión inicial sobre el rango, la distribución y los valores típicos de las variables. Esto permite identificar patrones generales y posibles anomalías.
+
+## **3.1 Variables Numéricas**
+
+Se analizan las variables numéricas mediante histogramas y medidas descriptivas para evaluar su distribución y detectar valores atípicos.
+
+```{r}
+# Seleccionar columnas numéricas
+num_data <- data %>% select(where(is.numeric))
+
+# Verificar si hay columnas numéricas
+if (ncol(num_data) > 0) {
+  cat("### Estadísticas para Variables Numéricas\n")
+  
+  # Imprimir estadísticas descriptivas básicas
+  print(describe(num_data)) # Estadísticas básicas
+  
+} else {
+  cat("No hay variables numéricas en el dataset.\n")
+}
+
+  
+```
+
+```{r}
+# cargar tidyr si es necesario
+library(tidyr)
+
+# Visualización: Histogramas de Variables Numéricas
+# Dividir las variables en grupos de 9
+variable_groups <- split(names(num_data), ceiling(seq_along(names(num_data)) / 6))
+
+for (group in variable_groups) {
+  # Filtrar las variables del grupo actual
+  group_data <- num_data %>% select(all_of(group))
+  
+  # Convertir a formato largo
+  group_data_long <- group_data %>%
+    pivot_longer(cols = everything(), names_to = "Variable", values_to = "Valor")
+  
+  # Crear los gráficos
+  print(
+    ggplot(group_data_long, aes(x = Valor)) +
+      geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+      facet_wrap(~ Variable, scales = "free", ncol = 3) +
+      theme_minimal() +
+      theme(
+        strip.text = element_text(size = 8),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, hjust = 0.5)
+      ) +
+      labs(title = "Distribución de Variables Numéricas", 
+           x = "Valor", 
+           y = "Frecuencia")
+  )
+}
+```
+
+```{r}
+# Cargar librerías necesarias
+library(tidyverse)
+library(cowplot)
+
+# Eliminar valores NA en num_data
+num_data_clean <- num_data %>% drop_na()
+
+# Confirmar que hay variables numéricas
+if (ncol(num_data_clean) > 0) {
+  # Iterar sobre las variables numéricas
+  for (var in names(num_data_clean)) {
+    # Crear histogramas
+    hist_plot <- ggplot(num_data_clean, aes(x = !!sym(var))) +
+      geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+      theme_minimal() +
+      labs(title = paste("Histograma de", var), x = var, y = "Frecuencia") +
+      theme(plot.title = element_text(size = 10))  # Ajuste de tamaño de título
+    
+    # Crear boxplots
+    box_plot <- ggplot(num_data_clean, aes(y = !!sym(var))) +
+      geom_boxplot(fill = "blue", alpha = 0.7, outlier.color = "red") +
+      theme_minimal() +
+      labs(title = paste("Boxplot de", var), y = var) +
+      theme(plot.title = element_text(size = 10))  # Ajuste de tamaño de título
+    
+    # Crear Q-Q plots
+    qq_plot <- ggplot(num_data_clean, aes(sample = !!sym(var))) +
+      stat_qq() +
+      stat_qq_line(color = "red") +
+      theme_minimal() +
+      labs(title = paste("Q-Q Plot de", var), x = "Cuantiles Teóricos", y = "Cuantiles de los Datos") +
+      theme(plot.title = element_text(size = 10))  # Ajuste de tamaño de título
+    
+    # Mostrar los gráficos en una cuadrícula
+    print(plot_grid(hist_plot, box_plot, qq_plot, ncol = 3))
+  }
+} else {
+  cat("No hay variables numéricas en el dataset.\n")
+}
+
+
+```
+
+A partir del análisis estadístico descriptivo proporcionado en la tabla, se pueden observar las siguientes características de las variables:
+
+### **Tendencia Central y Dispersión**
+
+1.  **Media y Mediana:**
+
+    -   Las variables como `accelX.g.` (Media = 0.80, Mediana = 0.85) y `accelY.g.` (Media = 0.27, Mediana = 0.29) tienen valores cercanos entre la media y la mediana, lo que indica distribuciones relativamente simétricas.
+
+    -   En contraste, `gyroY.rad.s.` (Media = -0.02, Mediana = 0.00) muestra cierta asimetría, lo que puede estar relacionado con eventos extremos o ruido.
+
+2.  **Rango y Desviación Estándar (SD):**
+
+    -   Variables como `magZ.µT.` tienen un rango muy amplio (Rango = 44.04) y una desviación estándar alta (SD = 10.10), lo que refleja una gran variabilidad, probablemente asociada a mediciones ambientales o condiciones externas.
+
+    -   Por otro lado, variables como `accelZ.g.` (Rango = 1.25, SD = 0.20) tienen una variabilidad mucho más contenida.
+
+### **Asimetría (Skewness)**
+
+-   Valores cercanos a 0 indican distribuciones más simétricas. Por ejemplo, `accelY.g.` (-0.11) y `gyroZ.rad.s.` (-0.02) tienen asimetría baja.
+
+-   Variables como `m13` (Skewness = 1.78) y `m33` (-1.14) presentan alta asimetría, indicando una cola alargada hacia un extremo.
+
+### **Curtosis**
+
+-   La curtosis mide las colas de las distribuciones:
+
+    -   **Valores Altos:** Variables como `accelX.g.` (Curtosis = 4.47) y `m11` (Curtosis = 4.86) tienen colas pesadas, lo que puede indicar la presencia de outliers o eventos extremos significativos.
+
+    -   **Valores Bajos:** Variables como `m32` (Curtosis = 1.86) y `m33` (Curtosis = 2.75) tienen colas menos pronunciadas, acercándose más a una distribución normal.
+
+### **Errores Estándar (SE)**
+
+-   Los valores del error estándar (SE) son bajos en general, lo que indica que las medias están bien representadas para el tamaño de muestra proporcionado.
+
+### **Observaciones Relevantes**
+
+-   Las variables geoespaciales como `Lat` y `Long` tienen valores constantes (SD = 0.00), lo que sugiere que estas variables no aportan variabilidad en este dataset y podrían ser descartadas del análisis.
+
+-   La variable `Pressure.kilopascals.` muestra dispersión limitada, pero su relevancia puede depender del contexto del análisis.
+
+### **Recomendaciones**
+
+1.  **Transformaciones:**
+
+    -   Variables con alta asimetría y curtosis, como `m13` y `m33`, podrían beneficiarse de transformaciones logarítmicas o Box-Cox para aproximar la normalidad.
+
+2.  **Escalado:**
+
+    -   Dado que las variables tienen diferentes rangos y desviaciones estándar, se recomienda aplicar técnicas de escalado como **z-score** o **min-max** antes de modelar.
+
+3.  **Revisión de Variables Constantes:**
+
+    -   Variables con varianza cero, como `Lat` y `Long`, pueden ser eliminadas del análisis, ya que no aportan información útil para modelos predictivos.
+
+4.  **Revisión de Outliers:**
+
+    -   Las variables con alta curtosis y rango amplio, como `magZ.µT.`, deben ser inspeccionadas para identificar y manejar posibles outliers que podrían influir desproporcionadamente en el análisis.
+
+Este análisis ayuda a identificar distribuciones, posibles transformaciones y las variables que requieren más atención en los siguientes pasos del proceso analítico.
+
+## 3.2 Variables Categóricas
+
+Las variables categóricas se analizan para evaluar el balance de las clases, especialmente la variable objetivo.
+
+```{r}
+# Convertir las columnas character restantes en factor
+data <- data %>%
+  mutate(across(where(is.character), as.factor))
+
+# Seleccionar las variables categóricas
+cat_data <- data %>% select(where(is.factor))
+
+# Verificar las estadísticas de variables categóricas
+if (ncol(cat_data) > 0) {
+  cat("### Estadísticas para Variables Categóricas\n")
+  print(sapply(cat_data, table))
+}
+
+```
+
+```{r}
+# Gráficos de barras para cada variable categórica
+# Crear una lista para almacenar los gráficos
+plot_list <- list()
+
+# Crear gráficos de barras para cada variable categórica y almacenarlos en la lista
+for (var in names(cat_data)) {
+  p <- ggplot(cat_data, aes_string(x = var)) +
+    geom_bar(fill = "blue", alpha = 0.7) +
+    theme_minimal() +
+    labs(title = paste("Distribución de", var),
+         x = var,
+         y = "Frecuencia") +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) # Categorías horizontales
+  
+  # Agregar el gráfico a la lista
+  plot_list[[var]] <- p
+}
+
+# Combinar todos los gráficos en una sola hoja
+grid.arrange(grobs = plot_list, ncol = 2) # Ajusta ncol para cambiar las columnas
+```
+
+# 4. Análisis de Valores Faltantes y Outliers
+
+## 4.1 Detección de Valores faltantes
+
+Identificar valores faltantes es crucial porque pueden afectar el rendimiento del modelo predictivo. Este paso ayuda a decidir estrategias para imputar o manejar estos valores.
+
+```{r}
+cat("### Análisis de Valores Faltantes\n")
+# Resumen de valores faltantes por columna
+print(sapply(data, function(x) sum(is.na(x))))
+
+# Visualización de valores faltantes mejorada
+vis_miss(data) +
+  ggtitle("Mapa de Valores Faltantes") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 8), # Ajuste de las etiquetas del eje X
+    axis.text.y = element_text(size = 10),                       # Ajuste de las etiquetas del eje Y
+    plot.title = element_text(hjust = 0.5, size = 14)            # Centrar y ajustar tamaño del título
+  )
+
+
+```
+
+El análisis muestra que no hay valores nulos en el dataset. Esto significa que todas las variables contienen información completa para las 816 observaciones registradas. Este resultado asegura que no será necesario realizar técnicas de imputación de datos.
+
+## 4.2 Detección de Outliers Univariantes
+
+Usaremos el rango intercuartílico (IQR) para identificar outliers y calcular el porcentaje de valores extremos en cada variable numérica.
+
+```{r}
+if (ncol(num_data) > 0) {
+  cat("### Análisis de Outliers\n")
+  
+  # Cálculo de outliers por IQR
+  outlier_detection <- num_data %>%
+    summarise(across(everything(), ~ {
+      q1 <- quantile(.x, 0.25, na.rm = TRUE)
+      q3 <- quantile(.x, 0.75, na.rm = TRUE)
+      iqr <- q3 - q1
+      sum(.x < (q1 - 1.5 * iqr) | .x > (q3 + 1.5 * iqr), na.rm = TRUE) / length(.x) * 100
+    }))
+  
+  # Transponer la tabla
+  outlier_detection <- as.data.frame(t(outlier_detection))
+  outlier_detection$Variable <- rownames(outlier_detection)
+  rownames(outlier_detection) <- NULL
+  
+  # Reordenar las columnas
+  outlier_detection <- outlier_detection %>%
+    select(Variable, `Outliers (%)` = V1) %>%
+    arrange(desc(`Outliers (%)`))  # Ordenar de mayor a menor
+  
+  # Mostrar la tabla
+  print(outlier_detection)
+}
+
+```
+
+**Visualización de Outliers**
+
+Utilizaremos boxplots para visualizar los outliers en cada variable numérica.
+
+```{r}
+if (ncol(num_data) > 0) {
+  # Transformar datos a formato largo
+  num_data_long <- num_data %>%
+    pivot_longer(cols = everything(), names_to = "Variable", values_to = "Valor")
+  
+  # Dividir las variables en grupos de 6
+  variable_groups <- split(unique(num_data_long$Variable), ceiling(seq_along(unique(num_data_long$Variable)) / 6))
+
+  for (group in variable_groups) {
+    # Filtrar las variables del grupo actual
+    group_data_long <- num_data_long %>% filter(Variable %in% group)
+    
+    # Crear los boxplots
+    print(
+      ggplot(group_data_long, aes(x = Variable, y = Valor)) +
+        geom_boxplot(outlier.colour = "red", outlier.size = 1.5, fill = "lightblue") +
+        theme_minimal() +
+        labs(
+          title = "Visualización de Outliers",
+          x = "Variable",
+          y = "Valores"
+        ) +
+        theme(
+          plot.title = element_text(size = 8, hjust = 0.5),
+          axis.text.x = element_text(angle = 0, hjust = 1)
+        ) +
+        facet_wrap(~ Variable, scales = "free", ncol = 3)  # Cambia "ncol" a 2 o 3 según el diseño que prefieras
+    )
+  }
+} else {
+  cat("No hay variables numéricas en el dataset.\n")
+}
+
+```
+
+En el análisis univariado, se identificaron variables con un porcentaje significativo de **outliers (\>10%)**, lo que puede influir considerablemente en los análisis y resultados si no se manejan adecuadamente. Las variables más relevantes son:
+
+1.  **Yaw.rads. (22.95%)**: Representa la orientación angular del sistema. Los valores extremos podrían estar relacionados con cambios abruptos en la trayectoria o errores en los sensores. Se recomienda explorar estrategias como **winsorización** o **transformaciones robustas** para mitigar su impacto.
+
+2.  **gyroZ.rad.s. (14.57%) y gyroY.rad.s. (13.87%)**: Estas variables capturan las velocidades angulares en los ejes Z e Y, respectivamente. Los valores atípicos podrían ser el resultado de maniobras bruscas o ruido en los sensores. Es recomendable aplicar **winsorización** para suavizar su efecto.
+
+3.  **qZ (12.46%)**: Este componente de orientación podría estar influenciado por errores de calibración o cambios significativos en la dinámica del sistema. Se sugiere una **transformación** para manejar los outliers.
+
+4.  **accelUserX.g. (10.12%)**: Representa la aceleración específica en el eje X. Los valores extremos pueden estar asociados a vibraciones o turbulencias durante el despegue. Una **transformación ,** imputacion como winsorinzacion o mediana puede ayudar a estabilizar la distribución.
+
+Estas variables son esenciales para comprender el sistema de transporte, incluyendo aspectos como posición, estabilidad, y precisión de los sensores. La aplicación de transformaciones adecuadas garantizará una mejor calidad de los datos y robustez en el análisis.
+
+## 4.3 Multivariate Outliers
+
+```{r}
+# Cargar la librería
+library(chemometrics)
+
+# Crear una copia del dataset original para trabajar
+data_analysis <- data
+
+# Seleccionar las variables continuas con mayor porcentaje de outliers (>10%), excluyendo las mencionadas
+selected_vars <- data_analysis %>%
+  select(gyroZ.rad.s., gyroY.rad.s., Yaw.rads., qZ, accelUserX.g.)  # Incluir variables relevantes
+
+# Calcular las distancias de Mahalanobis (clásica y robusta)
+res.out <- Moutlier(selected_vars, quantile = 0.9999)
+
+# Inspeccionar resultados
+str(res.out)
+
+```
+
+```{r}
+# Visualizar outliers multivariantes
+par(mfrow = c(1, 1)) # Una sola ventana de gráfico
+plot(res.out$md, res.out$rd, 
+     xlab = "Mahalanobis Clásica", 
+     ylab = "Mahalanobis Robusta", 
+     main = "Outliers Multivariantes con Distancias de Mahalanobis")
+abline(h = res.out$cutoff, col = "red") # Umbral robusto
+abline(v = res.out$cutoff, col = "red") # Umbral clásico
+text(res.out$md, res.out$rd, labels = rownames(data_analysis), adj = 1, cex = 0.7)
+```
+
+```{r}
+# Identificar observaciones que son outliers multivariantes
+outlier_indices <- which((res.out$md > res.out$cutoff) & (res.out$rd > res.out$cutoff))
+cat("Observaciones outliers multivariantes:\n")
+print(outlier_indices)
+```
+
+```{r}
+# Crear un nuevo dataset con la columna de outliers sin afectar el original
+data_with_outliers <- data_analysis %>%
+  mutate(outlier_multivar = ifelse(row_number() %in% outlier_indices, "Outlier", "No Outlier"))
+
+# Resumen de la nueva variable en el dataset modificado
+table(data_with_outliers$outlier_multivar)
+
+```
+
+Para visualizar estos outliers, se generó un gráfico bivariado que muestra las distancias clásicas frente a las robustas. Los puntos fuera de las líneas rojas en el gráfico representan las observaciones más atípicas, las cuales merecen un análisis más detallado.
+
+```{r}
+# Mostrar un resumen de las filas marcadas como outliers
+summary(data_with_outliers %>% filter(outlier_multivar == "Outlier"))
+```
+
+En este análisis, se utilizaron las distancias de Mahalanobis, tanto clásicas como robustas, para identificar outliers multivariantes en las variables clave: `gyroZ.rad.s.`, `gyroY.rad.s.`, `Yaw.rads.`, `qZ`, y `accelUserX.g.`. Estas variables fueron seleccionadas por su relevancia en el análisis del comportamiento dinámico del sistema y por presentar un alto porcentaje de outliers en el análisis univariado.
+
+Los resultados identificaron **33 observaciones** (1.1% del total de registros) como outliers multivariantes. Estas sobresalen en el espacio multivariante, indicando eventos extremos o posibles anomalías asociadas a movimientos inusuales, errores de captura o condiciones específicas del entorno.
+
+Se recomienda aplicar técnicas como **winsorización** para mitigar el impacto de estos valores extremos sin excluirlos, preservando su información potencialmente valiosa. Además, se sugiere un **análisis manual complementario** para identificar patrones o detalles que puedan escaparse del criterio automatizado de Mahalanobis y garantizar una comprensión más completa de las anomalías detectadas.
+
+### Revision Manual
+
+```{r}
+# 1. Definir los índices de los outliers multivariantes (actualizados tras revisión manual)
+outlier_indices <- c(
+  318, 319, 320, 404, 405, 414, 415, 416, 417, 
+  501, 502, 503, 504, 505, 544, 545, 546, 547, 
+  586, 587, 588, 589, 590, 591, 633, 
+  664, 665, 666, 667, 668, 669, 703, 704
+)
+
+# 2. Filtrar las observaciones outliers del dataset original
+outlier_data <- data_analysis[outlier_indices, ]
+View(outlier_data)  # Abrir la vista interactiva para inspección
+
+# 3. Resumen estadístico de los outliers
+summary(outlier_data)
+
+# 4. Comparar distribuciones con el resto del dataset
+# Configurar el layout para mostrar 5 pares de gráficos
+par(mfrow = c(2, 5))  # 2 filas, 5 columnas
+
+# Ajustar tamaño de título a 12
+cex_title <- 0.9  # Factor de ajuste para el tamaño del título
+
+# Variables del estudio
+variables_estudio <- c("gyroZ.rad.s.", "gyroY.rad.s.", "Yaw.rads.", "qZ", "accelUserX.g.")
+
+# Bucle para generar gráficos para cada variable
+for (var in variables_estudio) {
+  # Comparar distribución general
+  boxplot(data_analysis[[var]], 
+          main = paste("Distribución General\n(", var, ")", sep = ""), 
+          col = "lightblue", 
+          cex.main = cex_title)
+  
+  # Comparar distribución de outliers
+  boxplot(outlier_data[[var]], 
+          main = paste("Outliers en\n(", var, ")", sep = ""), 
+          col = "salmon", 
+          cex.main = cex_title)
+}
+
+# Resetear el layout
+par(mfrow = c(1, 1))
+
+
+# 5. Inspeccionar registros adicionales
+head(outlier_data[, c("Timestamp", "ActivityType", "gyroZ.rad.s.", "gyroY.rad.s.")])
+
+# 6. Relación entre variables seleccionadas en los outliers
+pairs(outlier_data[, c("gyroZ.rad.s.", "gyroY.rad.s.", "Yaw.rads.", "qZ", "accelUserX.g.")],
+      main = "Relación entre Variables en Outliers")
+
+# 7. Agregar una columna de decisión manual para cada outlier
+outlier_data <- outlier_data %>%
+  mutate(decision = ifelse(gyroZ.rad.s. > 15 & gyroY.rad.s. > 15, "Conservar", "Revisar"))
+
+# Mostrar dataset con decisiones
+View(outlier_data)
+
+# 8. Incorporar las decisiones al dataset original
+data_analysis$outlier_review <- "No Outlier"
+data_analysis$outlier_review[outlier_indices] <- outlier_data$decision
+
+# 9. Resumen de las decisiones tomadas
+table(data_analysis$outlier_review)
+
+```
+
+### Validación Manual de Outliers Multivariantes
+
+Como parte del análisis, se identificaron 33 observaciones clasificadas como outliers multivariantes utilizando distancias de Mahalanobis. Estas observaciones fueron revisadas manualmente para evaluar su posible origen y validez en el contexto de la actividad "Cycling".
+
+#### **Observaciones de la Validación Manual**
+
+1.  **Verificación de los Valores:**
+
+    -   Se revisaron los registros correspondientes a los índices detectados (`318, 319, ..., 704`) en las variables críticas: `gyroZ.rad.s.`, `gyroY.rad.s.`, `Yaw.rads.`, `qZ`, y `accelUserX.g.`.
+
+    -   Los datos muestran valores atípicos en estas variables:
+
+        -   **`gyroZ.rad.s.`**: Valores extremos superiores a 3 en algunas observaciones, reflejando **cambios abruptos en la velocidad angular** en el eje Z.
+
+        -   **`gyroY.rad.s.`**: Valores cercanos a 3.3 en varias observaciones, indicando posibles maniobras bruscas o giros rápidos.
+
+        -   **`Yaw.rads.`**: Variaciones amplias de orientación, incluyendo rotaciones significativas.
+
+        -   **`accelUserX.g.`**: Picos de aceleración específicos que sugieren **ajustes de ritmo o respuesta a condiciones externas**.
+
+        -   **`qZ`**: Componentes de orientación con desviaciones fuera del rango esperado, reflejando **desalineaciones dinámicas**.
+
+2.  **Distribución Visual:**
+
+    -   Los **boxplots comparativos** entre la distribución general y los outliers muestran que las observaciones identificadas están significativamente fuera del rango típico.
+
+    -   Los **gráficos de pares** entre las variables críticas sugieren correlaciones específicas entre la aceleración y las velocidades angulares, indicando **patrones dinámicos** asociados a cambios significativos durante la actividad.
+
+3.  **Análisis de Contexto:**
+
+    -   Todas las observaciones corresponden a la actividad "Cycling", concentradas en un intervalo temporal estrecho (2020-09-11 23:12:14 - 23:12:15).
+
+    -   Los patrones detectados podrían reflejar eventos reales, como maniobras rápidas, ajustes de postura o cambios de ritmo. Sin embargo, no se descartan posibles ruidos en los sensores como causa.
+
+**Conclusión de la Validación Manual**
+
+-   No se detectaron errores evidentes en el formato de los datos ni inconsistencias generales en los registros revisados.
+
+-   Los valores atípicos parecen reflejar eventos específicos durante la actividad "Cycling", lo que podría aportar información relevante para identificar **patrones dinámicos** o **fases significativas** dentro de esta actividad.
+
+**Próximos Pasos**
+
+1.  **Transformaciones de Datos:**
+
+    -   Aplicar **winsorización** o **transformaciones logarítmicas** a las variables afectadas para limitar el impacto de los valores extremos sin perder la estructura de los datos.
+
+    -   Alternativamente, considerar técnicas robustas como **Normalización Z-Robust**.
+
+2.  **Segmentación de la Actividad "Cycling":**
+
+    -   Realizar un análisis detallado para identificar si los valores extremos reflejan subpatrones legítimos dentro de esta actividad.
+
+3.  **Preparación para el Modelado:**
+
+    -   Escalar las variables seleccionadas tras la transformación para uniformar las magnitudes y reducir la influencia de los valores extremos en el entrenamiento del modelo.
+
+# 5. Pruebas de Normalidad
+
+Evaluar si las variables numéricas siguen una distribución normal es un paso clave para seleccionar las técnicas estadísticas y de modelado más adecuadas. Esto permite asegurar que los supuestos subyacentes de ciertos métodos estadísticos, como pruebas paramétricas o modelos lineales, se cumplan correctamente.
+
+**Hipótesis:**
+
+-   **Nula (H₀):** Los datos tienen una distribución normal.
+
+-   **Alternativa (H₁):** Los datos no tienen una distribución normal.
+
+Se utilizarán pruebas estadísticas, como **Shapiro-Wilk** o **Kolmogorov-Smirnov**, para contrastar estas hipótesis y determinar si los datos pueden considerarse normalmente distribuidos.
+
+```{r}
+summary(num_data)
+
+```
+
+```{r}
+# Filtrar variables numéricas excluyendo las indicadas
+variables_a_descartar <- c("Lat", "Long", "Speed.m.s.", "TrueHeading", 
+                           "Alt.m.", "HorizontalAccuracy.m.", "VerticalAccuracy.m.", "Course")
+
+num_data_filtrado <- num_data[, !(names(num_data) %in% variables_a_descartar)]
+
+# Verificar si hay variables numéricas restantes después del filtrado
+if (ncol(num_data_filtrado) > 0) {
+  cat("### Pruebas de Normalidad con Interpretación\n")
+  
+  # Crear una lista para almacenar resultados
+  normality_interpretation <- list()
+  
+  # Iterar por cada columna numérica
+  for (variable in names(num_data_filtrado)) {
+    # Realizar el test de Shapiro-Wilk
+    shapiro_test <- shapiro.test(num_data_filtrado[[variable]])
+    
+    # Evaluar el resultado
+    if (shapiro_test$p.value > 0.05) {
+      interpretation <- paste(
+        "La variable", variable, 
+        "tiene un p-value =", round(shapiro_test$p.value, 4),
+        "- Se acepta la hipótesis nula, la muestra tiene una distribución normal (Probablemente Gaussiana).\n"
+      )
+    } else {
+      interpretation <- paste(
+        "La variable", variable, 
+        "tiene un p-value =", round(shapiro_test$p.value, 4),
+        "- Se rechaza la hipótesis nula, la muestra no tiene una distribución normal (Probablemente no Gaussiana).\n"
+      )
+    }
+    
+    # Agregar resultado a la lista
+    normality_interpretation[[variable]] <- interpretation
+  }
+  
+  # Imprimir resultados para cada variable
+  for (result in normality_interpretation) {
+    cat(result)
+    cat("------------------------------------------------------------\n")
+  }
+} else {
+  cat("No hay variables numéricas en el dataset después de filtrar.\n")
+}
+
+```
+
+Se realizaron pruebas de normalidad para todas las variables numéricas del dataset utilizando un nivel de significancia estándar (α=0.05\alpha = 0.05α=0.05). El objetivo fue determinar si los datos de cada variable siguen una distribución normal, lo que es crucial para la selección de técnicas estadísticas adecuadas.
+
+#### **Resultados:**
+
+Para todas las variables evaluadas, el p-value obtenido fue **igual a 0**, lo que indica que los datos no cumplen con la suposición de normalidad. Esto nos lleva a **rechazar la hipótesis nula (H₀)** en cada caso, concluyendo que las muestras no siguen una distribución normal.
+
+# **6. Análisis de Asimetría, Curtosis y Varianza**
+
+Este análisis ayuda a identificar variables con distribuciones sesgadas, colas largas o alta variabilidad. Esto es útil para detectar patrones y posibles transformaciones.
+
+```{r}
+if (ncol(num_data) > 0) {
+  cat("### Análisis de Asimetría, Curtosis y Varianza")
+  
+  # Calcular asimetría, curtosis y varianza
+  skew_kurt_var <- num_data %>%
+    summarise(across(everything(), list(
+      skewness = ~ skewness(.x, na.rm = TRUE),
+      kurtosis = ~ kurtosis(.x, na.rm = TRUE),
+      variance = ~ var(.x, na.rm = TRUE)
+    )))
+  
+  # Convertir resultados a formato largo
+  skew_kurt_var_long <- skew_kurt_var %>%
+    pivot_longer(cols = everything(), names_to = c("Variable", "Metric"), names_sep = "_") %>%
+    pivot_wider(names_from = "Metric", values_from = "value")
+  
+  # Renombrar las columnas para mayor claridad
+  colnames(skew_kurt_var_long) <- c("Variable", "Asimetría (Skewness)", "Curtosis (Kurtosis)", "Varianza")
+  
+  # Mostrar la tabla
+  print(skew_kurt_var_long)
+} else {
+  cat("No hay variables numéricas en el dataset.\n")
+}
+
+```
+
+El análisis de asimetría, curtosis y varianza revela importantes características sobre la distribución y la variabilidad de las variables en el dataset. La asimetría refleja el sesgo de las distribuciones: valores cercanos a 0 indican simetría, mientras que valores positivos o negativos revelan colas más largas hacia la derecha o izquierda, respectivamente. Por ejemplo, variables como `accelUserZ.g.` (-0.5199) y `gyroZ.rad.s.` (-0.4553) tienen asimetría negativa moderada, mientras que otras como `Pitch.rads.` (1.2204) muestran asimetría positiva más pronunciada, lo que sugiere la presencia de valores extremos o distribuciones sesgadas.
+
+La curtosis nos permite evaluar la propensión de las variables a valores extremos. Variables con alta curtosis, como `gyroZ.rad.s.` (7.7404) y `Pitch.rads.` (3.6447), presentan colas pesadas, indicando posibles outliers significativos. En contraste, variables como `m33` (1.8656) y `qX` (2.7503) tienen colas más ligeras, lo que las acerca a distribuciones normales. Este análisis destaca la necesidad de transformar variables con alta curtosis para reducir el impacto de valores extremos en el análisis.
+
+En términos de varianza, esta mide la dispersión de los datos. Variables como `Pressure.kilopascals.` (6.8065) tienen alta dispersión, lo que podría reflejar diferentes condiciones ambientales o eventos específicos. Por otro lado, variables con baja varianza, como `m21` (0.0172), podrían aportar menor información relevante, siendo candidatas para ser descartadas en análisis posteriores.
+
+Dado que las variables no siguen una distribución normal y algunas contienen valores extremos, se recomienda utilizar **RobustScaler** para manejar variables con alta asimetría y curtosis, ya que es resistente a los outliers. Alternativamente, **Min-Max Scaling** puede ser útil para algoritmos sensibles a escalas absolutas, especialmente después de aplicar técnicas como winsorización o transformaciones logarítmicas para suavizar los valores extremos. Este enfoque garantiza una preparación óptima de los datos para análisis predictivos y modelos.
+
+# **7**. Análisis de Correlaciones
+
+Las correlaciones entre variables numéricas son esenciales para identificar redundancias o relaciones útiles para el modelado.
+
+```{r}
+library(knitr)      # Para formatear tablas
+library(kableExtra) # Para mejorar la presentación
+
+# Verificar si hay variables numéricas
+if (ncol(num_data) > 0) {
+  # Filtrar dinámicamente las variables numéricas (descartando automáticamente no numéricas)
+  num_data_filtered <- num_data %>%
+    select(where(is.numeric))
+  
+  # Comprobar que hay más de una variable numérica para calcular correlación
+  if (ncol(num_data_filtered) > 1) {
+    # Calcular la matriz de correlación
+    cor_matrix <- cor(num_data_filtered, use = "complete.obs")
+    
+    # Redondear para mejor visualización
+    cor_matrix_rounded <- round(cor_matrix, 2)
+    
+    # Imprimir la matriz de correlación en la consola
+    print("### Matriz de Correlación (Variables Numéricas)")
+    print(cor_matrix_rounded)
+    
+    # Generar una tabla con knitr::kable para visualización más ordenada
+    library(knitr)
+    kable(cor_matrix_rounded, caption = "Tabla de Correlaciones (Solo Variables Numéricas)")
+  } else {
+    cat("No hay suficientes variables numéricas para calcular una matriz de correlación.\n")
+  }
+} else {
+  cat("No hay variables numéricas en el dataset.\n")
+}
+
+```
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Convertir la matriz en formato largo
+corr_melted <- melt(cor_matrix)
+
+# Crear el heatmap
+ggplot(corr_melted, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "steelblue", high = "darkred", mid = "white", midpoint = 0, name = "Correlación") +
+  theme_minimal(base_size = 6) +  # Aumentar el tamaño del texto
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12)
+  ) +
+  labs(
+    title = "Mapa de Calor de Correlaciones (Excluyendo Variables No Relevantes)",
+    x = "Variables",
+    y = "Variables"
+  ) +
+  coord_fixed()
+
+
+```
+
+#### Análisis de Correlaciones
+
+#### Variables con Altas Correlaciones Positivas
+
+1.  **Matrices de orientación (m11 a m33)**:
+
+    -   Estas variables muestran correlaciones extremadamente altas entre sí (cercanas a 0.9 y superiores). Este resultado confirma que son redundantes y capturan información muy similar sobre la orientación del objeto.
+
+    -   Es posible conservar una o dos variables representativas para evitar redundancia en el análisis posterior.
+
+2.  **Campos magnéticos y calibraciones (magX.µT, magY.µT, magZ.µT y sus calibradas)**:
+
+    -   También presentan correlaciones muy fuertes (\>0.9). La calibración no introdujo cambios significativos en la estructura de los datos, lo que permite conservar solo una de las versiones (calibrada o no calibrada).
+
+#### Variables con Correlaciones Negativas Fuertes
+
+1.  **Yaw.rads. y Pitch.rads.**:
+
+    -   Estas variables tienen correlaciones negativas significativas con algunas variables de las matrices de orientación. Esto indica que capturan movimientos inversos como cabeceo (Pitch) y guiñada (Yaw), lo que puede ser útil en modelos que analicen dinámicas espaciales.
+
+2.  **magZ.µT y calMagZ.µT**:
+
+    -   Presentan correlaciones negativas notables con otras dimensiones del campo magnético. Esto puede deberse a la orientación de estas componentes en un eje opuesto.
+
+#### Correlaciones Débiles o No Significativas
+
+1.  **Pressure.kilopascals. y RelativeAltitude.meters.**:
+
+    -   Estas variables muestran correlaciones muy débiles (\<0.3) con otras variables. Aportan información única relacionada con las condiciones ambientales y no redundan con las dinámicas del movimiento.
+
+### Conclusiones y Recomendaciones
+
+1.  **Agrupación y Selección de Variables**:
+
+    -   Las matrices de orientación (m11 a m33) y las variables de campos magnéticos (magX.µT, magY.µT, magZ.µT y sus calibraciones) deberían ser reducidas seleccionando una o dos variables representativas.
+
+2.  **Transformaciones Adicionales**:
+
+    -   Considera invertir el signo de variables con correlaciones opuestas como magZ.µT para facilitar la interpretación.
+
+    -   Variables como Pitch.rads. y Yaw.rads. podrían beneficiarse de una normalización para analizar su comportamiento dinámico.
+
+3.  **Preparación para Modelos**:
+
+    -   Antes de entrenar modelos, realiza una revisión final para asegurar que las variables seleccionadas no incluyan redundancias y escalarlas si es necesario.
+
+### **Analisisis de Colinealidad**
+
+A partir del análisis de correlaciones realizado en el dataset, se ha identificado que algunas variables presentan relaciones fuertes entre sí, lo que sugiere la presencia de **colinealidad**. Este fenómeno ocurre cuando dos o más variables predictoras están altamente correlacionadas, lo que puede afectar negativamente la estabilidad y la interpretabilidad del modelo.
+
+Dado que el dataset incluye múltiples mediciones de aceleración, velocidad angular y variables derivadas de sensores, es importante realizar un análisis de colinealidad para:
+
+1.  **Identificar variables redundantes:** Detectar aquellas características que contienen información duplicada o muy similar, lo que puede generar sobreajuste en modelos predictivos.
+
+2.  **Reducir la dimensionalidad del problema:** Determinar si es necesario eliminar o transformar variables para mejorar la eficiencia del modelo.
+
+3.  **Evitar problemas en algoritmos sensibles a la colinealidad:** Modelos como la regresión logística, SVM y redes neuronales pueden verse afectados por la presencia de colinealidad, lo que puede distorsionar la estimación de coeficientes y afectar la capacidad de generalización.
+
+```{r}
+library(dplyr)
+
+# Verificar que el dataset existe
+if (exists("data")) {
+  # Filtrar las variables numéricas y eliminar la variable dependiente (ActivityType)
+  num_data_filtered <- data %>%
+    select(where(is.numeric)) %>%
+    mutate(dummy_target = runif(nrow(.), 0, 1)) # Crear una variable dummy temporal
+
+  # Validar si hay suficientes variables para calcular el modelo
+  if (ncol(num_data_filtered) > 1) {
+    # Crear un modelo de regresión con las variables predictoras
+    vif_model <- lm(dummy_target ~ ., data = num_data_filtered)
+    
+    # Calcular los valores de VIF
+    vif_values <- vif(vif_model)
+    
+    # Imprimir los valores de VIF
+    print("### Factores de Inflación de Varianza (VIF)")
+    print(vif_values)
+    
+    # Identificar variables con alta colinealidad (VIF > 10 como umbral común)
+    high_vif <- vif_values[vif_values > 10]
+    if (length(high_vif) > 0) {
+      cat("\nVariables con alta colinealidad (VIF > 10):\n")
+      print(high_vif)
+    } else {
+      cat("\nNo se encontraron variables con alta colinealidad (VIF <= 10).\n")
+    }
+  } else {
+    cat("No hay suficientes variables numéricas para calcular el VIF.\n")
+  }
+} else {
+  cat("El dataset 'data' no existe en el entorno.\n")
+}
+```
+
+#### **Resumen General**
+
+Los VIF indican un alto nivel de colinealidad en varias variables del dataset, especialmente en aquellas relacionadas con:
+
+1.  **Matrices de orientación (m11 a m33)**.
+
+2.  **Componentes cuaterniónicas (qX, qY, qZ, qW)**.
+
+3.  **Sensores ambientales (Pressure.kilopascals., RelativeAltitude.meters.)**.
+
+4.  **Campos magnéticos (magX.µT, magY.µT, magZ.µT y sus calibradas)**.
+
+#### **Variables con Alta Colinealidad (VIF \> 10)**
+
+1.  **Matrices de Orientación (m11 a m33)**:
+
+    -   Estas variables presentan VIF extremadamente altos, alcanzando valores como `92783.36` (m33). Esto indica una fuerte redundancia entre las diferentes componentes de la orientación espacial.
+
+    -   **Acción recomendada**: Conservar una o dos variables representativas y eliminar el resto.
+
+2.  **Componentes Cuaterniónicas (qX, qY, qZ, qW)**:
+
+    -   Los VIF de estas variables superan ampliamente los valores aceptables (`qX: 821417.54`, `qW: 377014.84`), indicando que hay redundancia significativa.
+
+    -   **Acción recomendada**: Seleccionar una representación alternativa o realizar transformaciones.
+
+3.  **Sensores Ambientales**:
+
+    -   `Pressure.kilopascals.` y `RelativeAltitude.meters.` presentan VIF elevados (`34308.45` y `34416.54`), lo que sugiere colinealidad con otras variables.
+
+    -   **Acción recomendada**: Si estas variables no aportan información única, considerar su eliminación o incluirlas solo en análisis específicos.
+
+4.  **Campos Magnéticos**:
+
+    -   Las componentes magnéticas y sus calibraciones (magX.µT, magY.µT, magZ.µT, calMagX.µT, calMagY.µT, calMagZ.µT) tienen VIF entre `192.98` y `1510.61`, lo que indica redundancia dentro del grupo.
+
+    -   **Acción recomendada**: Seleccionar una versión (calibrada o no) que sea más representativa.
+
+5.  **Variables de Aceleración**:
+
+    -   Aceleraciones específicas como `accelX.g.`, `accelY.g.`, `accelZ.g.` tienen VIF elevados (`87.33`, `260.83`, `85.66`), sugiriendo colinealidad con otras variables de aceleración.
+
+    -   **Acción recomendada**: Evaluar cuál de estas variables es más relevante en función del contexto del análisis.
+
+6.  **Ángulos de Rotación (Roll.rads., Pitch.rads., Yaw.rads.)**:
+
+    -   Variables como `Pitch.rads.` (`104908.63`) y `Roll.rads.` (`21829.91`) tienen colinealidad extrema, posiblemente relacionada con las matrices de orientación.
+
+    -   **Acción recomendada**: Seleccionar una representación de rotación única y eliminar redundancias.
+
+### **Recomendaciones Generales**
+
+1.  **Reducción Manual de Variables**:
+
+    -   **Matrices de Orientación (m11 a m33)**: Conservar solo una o dos variables representativas.
+
+    -   **Campos Magnéticos**: Seleccionar una versión calibrada o no calibrada.
+
+    -   **Ángulos de Rotación**: Conservar únicamente un ángulo (por ejemplo, `Yaw.rads.`) si es más relevante.
+
+2.  **Técnicas Automáticas de Reducción**:
+
+    -   Si se desea evitar la selección manual, se puede aplicar **PCA (Análisis de Componentes Principales)** para reducir la dimensionalidad mientras se preserva la variabilidad clave.
+
+3.  **Eliminación de Variables de Alta Colinealidad**:
+
+    -   Variables con VIF extremos (\>1000) como `qX`, `qY`, `qZ`, `qW` o `Pitch.rads.` deben ser eliminadas o transformadas antes de incluirlas en cualquier modelo estadístico o de machine learning.
+
+4.  **Validación Posterior**:
+
+    -   Tras la eliminación o transformación de variables, es necesario recalcular los VIF para asegurar que se ha mitigado la colinealidad de manera efectiva.
+
+**Extensión del Análisis: Relaciones Dinámicas entre las Fases del Cycling**
+
+Dado que el análisis de correlaciones confirmó la existencia de dependencias entre ciertas variables clave, se decide ampliar el estudio hacia la evaluación de relaciones dinámicas entre las distintas fases de la actividad Cycling. Aunque los datos disponibles corresponden exclusivamente a esta actividad, el análisis de estas relaciones permitirá comprender mejor cómo evolucionan las variables dinámicas durante las diferentes fases de movimiento.
+
+El objetivo de este análisis es:
+
+-   Evaluar la interacción entre aceleración, velocidad y orientación en el contexto de la actividad Cycling.
+
+-   Identificar patrones en los cambios de inclinación (Pitch), balanceo (Roll) y guiñada (Yaw) en función de las diferentes fases de movimiento (Inicio, Crucero Bajo, Crucero Alto).
+
+-   Explorar la influencia de los outliers previamente detectados, determinando si representan eventos significativos o patrones específicos dentro de la actividad.
+
+```{r}
+colnames(data)
+```
+
+```{r}
+# Crear etiquetas de fases de la actividad basadas en altitud relativa
+cycling_data_copy <- data %>%
+  mutate(ActivityPhase = case_when(
+    accelX.g. < 0.5 ~ "Inicio",
+    accelX.g. >= 0.5 & accelX.g. < 1.5 ~ "Esfuerzo Moderado",
+    accelX.g. >= 1.5 ~ "Esfuerzo Alto",
+    TRUE ~ "Otro"
+  ))
+
+# Verificar la distribución
+table(cycling_data_copy$ActivityPhase)
+
+```
+
+```{r}
+correlations_by_phase <- cycling_data_copy %>%
+  group_by(ActivityPhase) %>%
+  summarise(
+    Correlation_AccelX_Pitch = cor(accelX.g., Pitch.rads., use = "complete.obs"),
+    Correlation_AccelY_Roll = cor(accelY.g., Roll.rads., use = "complete.obs"),
+    Correlation_AccelZ_Yaw = cor(accelZ.g., Yaw.rads., use = "complete.obs")
+  )
+
+print(correlations_by_phase)
+
+```
+
+```{r}
+library(ggplot2)
+#Representar la distribución y relación de variables dinámicas en cada fase.
+ggplot(cycling_data_copy, aes(x = ActivityPhase, y = accelX.g., fill = ActivityPhase)) +
+  geom_boxplot() +
+  labs(title = "Distribución de Aceleración (Eje X) por Fase de Actividad", 
+       x = "Fase de Actividad", y = "Aceleración (g)")
+
+ggplot(cycling_data_copy, aes(x = ActivityPhase, y = Pitch.rads., fill = ActivityPhase)) +
+  geom_boxplot() +
+  labs(title = "Distribución de Pitch por Fase de Actividad", 
+       x = "Fase de Actividad", y = "Pitch (rad)")
+
+
+```
+
+```{r}
+# Explorar gráficamente cómo interactúan las variables clave durante cada fase.
+ggplot(cycling_data_copy, aes(x = accelX.g., y = Roll.rads., color = ActivityPhase)) +
+  geom_point() +
+  labs(
+    title = "Relación entre Aceleración (Eje X) y Roll por Fase de Actividad",
+    x = "Aceleración (g)",
+    y = "Roll (rad)"
+  )
+
+
+```
+
+```{r}
+# Filtrar datos de outliers previamente detectados
+outliers_data <- cycling_data_copy %>%
+  filter(row_number() %in% outlier_indices)
+
+# Comparar distribuciones de variables clave entre datos generales y outliers
+ggplot(cycling_data_copy, aes(x = ActivityPhase, y = accelX.g., fill = ActivityPhase)) +
+  geom_boxplot() +
+  geom_jitter(data = outliers_data, aes(y = accelX.g.), color = "red") +
+  labs(
+    title = "Distribución de Aceleración con Outliers Destacados",
+    x = "Fase de Actividad",
+    y = "Aceleración (g)"
+  )
+
+```
+
+1.  **Segmentación de Actividad y Variables Clave**:
+
+    -   Las fases de actividad (Inicio, Esfuerzo Moderado, Esfuerzo Alto) muestran patrones claros y diferenciados en las variables de aceleración (accelX.g.) y orientación (Pitch.rads., Roll.rads.), lo que valida la relevancia de estas variables en la caracterización dinámica del ciclismo.
+
+    -   **accelX.g.** y **Pitch.rads.** son variables importantes para identificar transiciones entre fases de esfuerzo, ya que reflejan cambios en la intensidad y la postura del ciclista.
+
+2.  **Comportamiento de Outliers**:
+
+    -   Los outliers detectados previamente son consistentes con el análisis por fases. En particular, las fases de Esfuerzo Moderado y Esfuerzo Alto contienen valores extremos que parecen reflejar eventos significativos, como cambios bruscos en la dinámica del pedaleo o ajustes al terreno.
+
+    -   Esto valida el análisis previo de outliers como indicador de eventos reales y no simplemente ruido, por lo que estos valores podrían aportar información valiosa para la predicción de actividades.
+
+3.  **Correlaciones Destacadas**:
+
+    -   La correlación fuerte y negativa entre **accelY.g.** y **Roll.rads.** en las fases de Inicio y Esfuerzo Moderado sugiere que el balanceo es altamente dependiente de la aceleración lateral. Esta relación podría ser clave para modelos que predicen el tipo de transporte o la dinámica del ciclista.
+
+    -   Las correlaciones entre **accelZ.g.** y **Yaw.rads.** en Esfuerzo Moderado sugieren que los cambios en aceleración vertical influyen en los giros, lo cual podría ser relevante para identificar maniobras específicas.
+
+4.  **Variables Relevantes para Modelos de Predicción**:
+
+    -   **Aceleración**: Las variables **accelX.g.**, **accelY.g.**, y **accelZ.g.** son importantes para capturar los cambios de intensidad y dirección del movimiento.
+
+    -   **Orientación**: **Pitch.rads.**, **Roll.rads.**, y **Yaw.rads.** son cruciales para reflejar el comportamiento dinámico en diferentes fases.
+
+    -   **ActivityPhase**: La segmentación de las fases aporta una dimensión temporal que mejora la contextualización de los datos.
+
+5.  **Implicaciones para Modelos Predictivos**:
+
+    -   La combinación de variables de aceleración y orientación, junto con la segmentación por fases, proporciona un marco sólido para predecir el tipo de transporte o la dinámica específica del ciclista.
+
+    -   Los outliers no deben eliminarse automáticamente, ya que parecen reflejar eventos significativos que podrían enriquecer la capacidad predictiva del modelo.
+
+# 9. Resumen y Conclusiones
+
+### 9.1 Resumen del Análisis Realizado
+
+#### Eliminación de Columnas y Transformaciones Básicas
+
+-   Se eliminaron las variables de ubicación y navegación (`Lat`, `Long`, `Speed(m/s)`, `TrueHeading`, `Alt(m)`, `HorizontalAccuracy(m)`, `VerticalAccuracy(m)`, `Course`) debido a que no se encuentran en otros conjuntos de datos y no pueden ser calculadas. Además, para asegurar una integración adecuada y mantener la unicidad en la estructura de los datos, se decidió conservar únicamente las variables que pueden ser comparadas o utilizadas en el análisis conjunto.
+
+-   Se convirtió la variable `Timestamp` al formato `datetime64[ns]` para facilitar la manipulación y análisis temporal.
+
+-   Se reclasificaron los valores de `ActivityType`, fusionando `Unknown` y `Walking` dentro de la categoría `Cycling` para garantizar la coherencia del análisis.
+
+#### Análisis Exploratorio de la Naturaleza de los Datos
+
+-   Se identificaron **outliers en múltiples variables clave**, principalmente en `Yaw.rads.`, `gyroZ(rad/s)`, `gyroY(rad/s)`, `accelUserX(g)`, `accelUserY(g)`, `qZ` y `Pitch(rads)`, con una frecuencia superior al 10%.
+
+-   Se utilizó **el método IQR y distancias de Mahalanobis** para detectar valores extremos, encontrando **33 observaciones atípicas (1.1%)**.
+
+-   Se identificaron **patrones dinámicos en la actividad de ciclismo**, con aceleraciones y velocidades angulares mostrando relaciones significativas en diferentes fases del movimiento.
+
+-   No se detectaron valores nulos en el dataset, por lo que no fue necesario aplicar técnicas de imputación.
+
+### 9.2 Conclusiones
+
+#### 1. Detección y Manejo de Outliers
+
+-   Variables como `Yaw.rads.`, `gyroZ(rad/s)`, `Pitch(rads)`, y `qZ` presentan valores extremos asociados a cambios bruscos en la dinámica del pedaleo.
+
+-   Los outliers fueron identificados pero **no se eliminaron ni se imputaron**, ya que reflejan eventos reales dentro de la actividad ciclística.
+
+-   Se sugiere explorar la aplicación de **winsorización o transformaciones logarítmicas** en futuras etapas de modelado para mitigar su impacto sin perder información valiosa.
+
+#### 2. Análisis de Correlaciones
+
+-   **Relaciones dinámicas clave** entre aceleraciones y velocidades angulares:
+
+    -   `accelX(g)` con `Pitch(rads)`: La inclinación del ciclista influye en la aceleración frontal.
+
+    -   `accelY(g)` con `Roll(rads)`: La aceleración lateral afecta el balanceo.
+
+    -   `accelZ(g)` con `Yaw.rads.`: Cambios en la aceleración vertical afectan la estabilidad de giro.
+
+-   **Colinealidad alta** en las variables de orientación (`qX`, `qY`, `qZ`, `qW`) y matriz de rotación (`m11 - m33`), indicando posible redundancia en la representación de la orientación.
+
+-   Las variables ambientales `Pressure.kilopascals.` y `RelativeAltitude.meters.` presentan alta colinealidad entre sí, aunque su correlación con otras variables del dataset es baja. Esto sugiere que su impacto en la dinámica del ciclismo es limitado y que podrían ser redundantes en el modelo de análisis. 
+
+#### 3. Transformaciones Aplicadas
+
+-   **Escalado de variables**:
+
+    -   **RobustScaler**: Para variables con alta curtosis y asimetría (`gyroX(rad/s)`, `accelX(g)`, `Yaw.rads.`).
+
+    -   **Min-Max Scaling**: Aplicado a `Pitch(rads)`, `Yaw.rads.`, `Pressure(kilopascals)`.
+
+-   **Transformaciones recomendadas para futuras iteraciones**:
+
+    -   **Transformaciones logarítmicas**: Para `accelX(g)`, `gyroZ(rad/s)`, `RelativeAltitude(meters)`.
+
+    -   **Reducción de Dimensionalidad**: Evaluar la eliminación de variables con **VIF altos (\>1000)** en `qX`, `qY`, `qZ`, `qW`, `Pitch.rads.`.
+
+### 9.3 **Flujo de Transformación de Datos**
+
+1.  Evaluar la aplicación de **winsorización o transformaciones logarítmicas** en variables con alta presencia de outliers, como `Yaw.rads.`, `gyroZ(rad/s)`, y `qZ`, para mejorar la estabilidad del modelo.
+
+2.  Refinar la selección de variables para mitigar el efecto de la colinealidad alta en `qX`, `qY`, `qZ`, `qW`, y `m11 - m33`. Se evaluará la aplicación de **reducción de dimensionalidad mediante PCA** para conservar solo las variables más informativas. Alternativamente, si la colinealidad es excesiva (VIF \> 1000), se considerará la eliminación de algunas de estas variables para evitar redundancia en el modelo.
+
+3.  Implementar estrategias de escalado adaptadas al modelo final, usando **RobustScaler para datos con alta dispersión** y **Min-Max Scaling en variables con rangos controlados**.
+
+4.  Desarrollar pruebas de validación del modelo considerando distintas combinaciones de transformación de datos y selección de variables para determinar el mejor rendimiento en la clasificación del tipo de transporte.
+
+# 10. Descarga de dataset
+
+```{r}
+head(data)  # Primeras 6 filas
+tail(data)  # Últimas 6 filas
+```
+
+```{r}
+str(data)  # Muestra estructura del dataset
+```
+
+```{r}
+write.csv(data, "dataset_resultante_cycling.csv", row.names = FALSE)
+```

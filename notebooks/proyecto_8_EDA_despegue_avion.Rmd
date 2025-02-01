@@ -1,9 +1,9 @@
 ---
-title: "Análisis Exploratorio de Datos (EDA) - Proyecto de Transporte"
+title: "Análisis Exploratorio de Datos (EDA) - Proyecto de Transporte -* Dataset  Avion - Despegue"
 output: html_notebook
 ---
 
-### Objetivos del Proyecto y Definición de Variables
+### General: Objetivos del Proyecto y Definición de Variables
 
 El objetivo principal de este proyecto es desarrollar un modelo basado en **Máquinas de Vectores de Soporte (SVM)** para predecir el **modo de transporte** utilizado por un individuo en función de los datos recopilados por sensores de dispositivos móviles. Se busca analizar cómo las diferentes señales captadas por el acelerómetro, giróscopo, barómetro, GPS y magnetómetro pueden ser utilizadas para inferir con precisión el medio de transporte en uso.
 
@@ -35,7 +35,7 @@ Para lograr esto, se cuenta con un conjunto de datos que incluye:
 
     -   **Nivel de Confianza**: Un indicador de la precisión estimada para la clasificación del transporte en los datos originales.
 
-### Alcance del Análisis
+### Objetivo Notebook: 
 
 El análisis exploratorio de datos (EDA) busca comprender la estructura del dataset, identificar patrones y evaluar la calidad de los datos antes de proceder con el modelado. Se incluyen tareas como:
 
@@ -52,7 +52,8 @@ El análisis exploratorio de datos (EDA) busca comprender la estructura del data
 ```{r}
 # Lista de paquetes necesarios
 necessary_packages <- c("dplyr", "ggplot2", "DataExplorer", "naniar", 
-                        "moments", "psych", "caret", "lubridate", "chemometrics")
+                        "moments", "psych", "caret", "lubridate", "chemometrics",
+                        "tidyr", "tidyverse", "cowplot", "car")
 
 # Instalar paquetes que no están instalados
 new_packages <- necessary_packages[!(necessary_packages %in% installed.packages()[, "Package"])]
@@ -122,7 +123,7 @@ head(data$Timestamp)
 class(data$Timestamp)  # Debería ser POSIXct
 ```
 
-### **2. Reemplazar valores `unknown` en `ActivityType` por `airplane`**
+### **2. Reemplazar valores `unknown` en `ActivityType`**
 
 ```{r}
 # Reemplazar "unknown" por "airplane" en ActivityType
@@ -131,15 +132,6 @@ data <- data %>%
 
 # Verificar los valores únicos de ActivityType
 unique(data$ActivityType)
-```
-
-```         
-```
-
-```         
-```
-
-```         
 ```
 
 # 3. Estadísticas Descriptivas
@@ -169,16 +161,12 @@ if (ncol(num_data) > 0) {
 ```
 
 ```{r}
-# Instalar y cargar tidyr si es necesario
-if (!requireNamespace("tidyr", quietly = TRUE)) {
-  install.packages("tidyr")
-}
+# cargar tidyr 
 library(tidyr)
 
 # Visualización: Histogramas de Variables Numéricas
-# Visualización: Histogramas de Variables Numéricas
-# Dividir las variables en grupos de 9
-variable_groups <- split(names(num_data), ceiling(seq_along(names(num_data)) / 9))
+# Dividir las variables en grupos de 6
+variable_groups <- split(names(num_data), ceiling(seq_along(names(num_data)) / 6))
 
 for (group in variable_groups) {
   # Filtrar las variables del grupo actual
@@ -197,7 +185,7 @@ for (group in variable_groups) {
       theme(
         strip.text = element_text(size = 8),
         axis.text.x = element_text(angle = 45, hjust = 1),
-        plot.title = element_text(size = 14, hjust = 0.5)
+        plot.title = element_text(size = 12, hjust = 0.5)
       ) +
       labs(title = "Distribución de Variables Numéricas", 
            x = "Valor", 
@@ -208,8 +196,6 @@ for (group in variable_groups) {
 
 ```{r}
 # Cargar librerías necesarias
-if (!requireNamespace("tidyverse", quietly = TRUE)) install.packages("tidyverse")
-if (!requireNamespace("cowplot", quietly = TRUE)) install.packages("cowplot")
 library(tidyverse)
 library(cowplot)
 
@@ -224,28 +210,30 @@ if (ncol(num_data_clean) > 0) {
     hist_plot <- ggplot(num_data_clean, aes(x = !!sym(var))) +
       geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
       theme_minimal() +
-      labs(title = paste("Histograma de", var), x = var, y = "Frecuencia")
+      labs(title = paste("Histograma de", var), x = var, y = "Frecuencia") +
+      theme(plot.title = element_text(size = 10))  # Ajuste de tamaño de título
     
     # Crear boxplots
     box_plot <- ggplot(num_data_clean, aes(y = !!sym(var))) +
       geom_boxplot(fill = "blue", alpha = 0.7, outlier.color = "red") +
       theme_minimal() +
-      labs(title = paste("Boxplot de", var), y = var)
+      labs(title = paste("Boxplot de", var), y = var) +
+      theme(plot.title = element_text(size = 10))  # Ajuste de tamaño de título
     
     # Crear Q-Q plots
     qq_plot <- ggplot(num_data_clean, aes(sample = !!sym(var))) +
       stat_qq() +
       stat_qq_line(color = "red") +
       theme_minimal() +
-      labs(title = paste("Q-Q Plot de", var), x = "Cuantiles Teóricos", y = "Cuantiles de los Datos")
+      labs(title = paste("Q-Q Plot de", var), x = "Cuantiles Teóricos", y = "Cuantiles de los Datos") +
+      theme(plot.title = element_text(size = 10))  # Ajuste de tamaño de título
     
     # Mostrar los gráficos en una cuadrícula
-    print(plot_grid(hist_plot, box_plot, qq_plot, ncol = 3, labels = c("A", "B", "C")))
+    print(plot_grid(hist_plot, box_plot, qq_plot, ncol = 3))
   }
 } else {
   cat("No hay variables numéricas en el dataset.\n")
 }
-
 
 ```
 
@@ -322,9 +310,6 @@ El conjunto de datos contiene mediciones de diferentes variables físicas y sens
 Las variables categóricas se analizan para evaluar el balance de las clases, especialmente la variable objetivo.
 
 ```{r}
-# Convertir la columna Timestamp a formato fecha y hora
-data <- data %>%
-  mutate(Timestamp = as.POSIXct(Timestamp, format = "%d-%b-%Y %H:%M:%OS"))
 
 # Convertir las columnas character restantes en factor
 data <- data %>%
@@ -338,10 +323,6 @@ if (ncol(cat_data) > 0) {
   cat("### Estadísticas para Variables Categóricas\n")
   print(sapply(cat_data, table))
 }
-
-```
-
-```{r}
 
 ```
 
@@ -389,7 +370,6 @@ vis_miss(data) +
     plot.title = element_text(hjust = 0.5, size = 14)            # Centrar y ajustar tamaño del título
   )
 
-
 ```
 
 El análisis muestra que no hay valores nulos en el dataset. Esto significa que todas las variables contienen información completa para las 816 observaciones registradas. Este resultado asegura que no será necesario realizar técnicas de imputación de datos.
@@ -424,8 +404,6 @@ if (ncol(num_data) > 0) {
   # Mostrar la tabla
   print(outlier_detection)
 }
-
-
 ```
 
 **Visualización de Outliers**
@@ -438,33 +416,33 @@ if (ncol(num_data) > 0) {
   num_data_long <- num_data %>%
     pivot_longer(cols = everything(), names_to = "Variable", values_to = "Valor")
   
-  # Obtener las variables únicas
-  unique_variables <- unique(num_data_long$Variable)
-  
-  # Crear gráficos individuales en un bucle
-  for (var in unique_variables) {
-    plot <- ggplot(num_data_long %>% filter(Variable == var), aes(x = Variable, y = Valor)) +
-      geom_boxplot(outlier.colour = "red", outlier.size = 1.5, fill = "lightblue") +
-      theme_minimal() +
-      labs(
-        title = paste("Visualización de Outliers -", var),
-        x = var,
-        y = "Valores"
-      ) +
-      theme(
-        plot.title = element_text(size = 14, hjust = 0.5),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank()
-      )
+  # Dividir las variables en grupos de 6
+  variable_groups <- split(unique(num_data_long$Variable), ceiling(seq_along(unique(num_data_long$Variable)) / 6))
+
+  for (group in variable_groups) {
+    # Filtrar las variables del grupo actual
+    group_data_long <- num_data_long %>% filter(Variable %in% group)
     
-    # Usar print() explícito para mostrar cada gráfico
-    print(plot)
+    # Crear los boxplots
+    print(
+      ggplot(group_data_long, aes(x = Variable, y = Valor)) +
+        geom_boxplot(outlier.colour = "red", outlier.size = 1.5, fill = "lightblue") +
+        theme_minimal() +
+        labs(
+          title = "Visualización de Outliers",
+          x = "Variable",
+          y = "Valores"
+        ) +
+        theme(
+          plot.title = element_text(size = 8, hjust = 0.5),
+          axis.text.x = element_text(angle = 0, hjust = 1)
+        ) +
+        facet_wrap(~ Variable, scales = "free", ncol = 3)  # Cambia "ncol" a 2 o 3 según el diseño que prefieras
+    )
   }
 } else {
   cat("No hay variables numéricas en el dataset.\n")
 }
-
-
 ```
 
 En el análisis univariado, se identificaron variables con un porcentaje significativo de outliers (\>10%), lo que podría afectar el análisis y los resultados si no se gestionan adecuadamente. A continuación, se destacan las variables más críticas:
@@ -495,10 +473,6 @@ res.out <- Moutlier(selected_vars, quantile = 0.9999)
 
 # Inspeccionar resultados
 str(res.out)
-
-```
-
-```{r}
 
 ```
 
@@ -562,10 +536,35 @@ View(outlier_data)  # Abrir la vista interactiva para inspección
 summary(outlier_data)
 
 # 4. Comparar distribuciones con el resto del dataset
-# Variable gyroZ.rad.s.
-par(mfrow = c(1, 2))  # Dividir la pantalla en dos gráficos
-boxplot(data_analysis$gyroZ.rad.s., main = "Distribución General de gyroZ.rad.s.", col = "lightblue")
-boxplot(outlier_data$gyroZ.rad.s., main = "Distribución de Outliers (gyroZ.rad.s.)", col = "salmon")
+# Configurar el layout para mostrar 5 pares de gráficos
+par(mfrow = c(2, 5))  # 2 filas, 5 columnas
+
+# Ajustar tamaño de título a 12
+cex_title <- 0.9  # Factor de ajuste para el tamaño del título
+
+# 1. Comparar `gyroZ.rad.s.`
+boxplot(data_analysis$gyroZ.rad.s., main = "Distribución General\n(gyroZ.rad.s.)", col = "lightblue", cex.main = cex_title)
+boxplot(outlier_data$gyroZ.rad.s., main = "Outliers en\n(gyroZ.rad.s.)", col = "salmon", cex.main = cex_title)
+
+# 2. Comparar `gyroY.rad.s.`
+boxplot(data_analysis$gyroY.rad.s., main = "Distribución General\n(gyroY.rad.s.)", col = "lightblue", cex.main = cex_title)
+boxplot(outlier_data$gyroY.rad.s., main = "Outliers en\n(gyroY.rad.s.)", col = "salmon", cex.main = cex_title)
+
+# 3. Comparar `accelUserX.g.`
+boxplot(data_analysis$accelUserX.g., main = "Distribución General\n(accelUserX.g.)", col = "lightblue", cex.main = cex_title)
+boxplot(outlier_data$accelUserX.g., main = "Outliers en\n(accelUserX.g.)", col = "salmon", cex.main = cex_title)
+
+# 4. Comparar `accelUserY.g.`
+boxplot(data_analysis$accelUserY.g., main = "Distribución General\n(accelUserY.g.)", col = "lightblue", cex.main = cex_title)
+boxplot(outlier_data$accelUserY.g., main = "Outliers en\n(accelUserY.g.)", col = "salmon", cex.main = cex_title)
+
+# 5. Comparar `magZ.µT.`
+boxplot(data_analysis$magZ.µT., main = "Distribución General\n(magZ.µT.)", col = "lightblue", cex.main = cex_title)
+boxplot(outlier_data$magZ.µT., main = "Outliers en\n(magZ.µT.)", col = "salmon", cex.main = cex_title)
+
+# Reset layout
+par(mfrow = c(1, 1))
+
 
 # 5. Inspeccionar registros adicionales
 head(outlier_data[, c("Timestamp", "ActivityType", "gyroZ.rad.s.", "gyroY.rad.s.")])
@@ -686,20 +685,6 @@ Para todas las variables evaluadas, el p-value obtenido fue **igual a 0**, lo qu
 Este análisis ayuda a identificar variables con distribuciones sesgadas, colas largas o alta variabilidad. Esto es útil para detectar patrones y posibles transformaciones.
 
 ```{r}
-# Instalar el paquete tidyr (si aún no lo tienes instalado)
-if (!requireNamespace("tidyr", quietly = TRUE)) {
-  install.packages("tidyr")
-}
-
-# Cargar el paquete tidyr
-library(tidyr)
-```
-
-```{r}
-install.packages("kableExtra")
-```
-
-```{r}
 if (ncol(num_data) > 0) {
   cat("### Análisis de Asimetría, Curtosis y Varianza")
   
@@ -738,10 +723,6 @@ Para manejar las variables con alta asimetría y curtosis, se sugieren transform
 # **7**. Análisis de Correlaciones
 
 Las correlaciones entre variables numéricas son esenciales para identificar redundancias o relaciones útiles para el modelado.
-
-```{r}
-install.packages("kableExtra")
-```
 
 ```{r}
 library(knitr)      # Para formatear tablas
@@ -826,17 +807,20 @@ ggplot(corr_melted, aes(x = Var1, y = Var2, fill = value)) +
 
     -   Algunas variables como **Pressure.kilopascals.** tienen correlaciones muy bajas con la mayoría de las demás, lo que indica que no están directamente relacionadas con otras mediciones.
 
-**Analisisis de Colinealidad**
+### **Analisisis de Colinealidad**
+
+A partir del análisis de correlaciones realizado en el dataset, se ha identificado que algunas variables presentan relaciones fuertes entre sí, lo que sugiere la presencia de **colinealidad**. Este fenómeno ocurre cuando dos o más variables predictoras están altamente correlacionadas, lo que puede afectar negativamente la estabilidad y la interpretabilidad del modelo.
+
+Dado que el dataset incluye múltiples mediciones de aceleración, velocidad angular y variables derivadas de sensores, es importante realizar un análisis de colinealidad para:
+
+1.  **Identificar variables redundantes:** Detectar aquellas características que contienen información duplicada o muy similar, lo que puede generar sobreajuste en modelos predictivos.
+
+2.  **Reducir la dimensionalidad del problema:** Determinar si es necesario eliminar o transformar variables para mejorar la eficiencia del modelo.
+
+3.  **Evitar problemas en algoritmos sensibles a la colinealidad:** Modelos como la regresión logística, SVM y redes neuronales pueden verse afectados por la presencia de colinealidad, lo que puede distorsionar la estimación de coeficientes y afectar la capacidad de generalización.
 
 ```{r}
-# Verifica que las librerías necesarias están instaladas y cargadas
-if (!requireNamespace("car", quietly = TRUE)) {
-  install.packages("car")
-}
-library(car)
-if (!requireNamespace("dplyr", quietly = TRUE)) {
-  install.packages("dplyr")
-}
+
 library(dplyr)
 
 # Verificar que el dataset existe
@@ -939,7 +923,19 @@ Estas variables presentan una alta redundancia con otras del dataset, y su prese
 
     -   Las variables calibradas (`calMagX.µT.` y similares) muestran valores de VIF extremadamente altos.
 
-**Relaciones dinámicas entre fases del vuelo**
+**Extensión del Análisis: Relaciones Dinámicas entre las Fases del Vuelo**
+
+Dado que el análisis de colinealidad confirmó la existencia de dependencias entre ciertas variables clave, se decide ampliar el estudio hacia la evaluación de **relaciones dinámicas** entre las distintas fases del vuelo. Aunque los datos disponibles **corresponden exclusivamente a la fase de despegue**, el análisis de estas relaciones permitirá comprender mejor cómo evolucionan las variables dinámicas durante este proceso crítico.
+
+El objetivo de este análisis es:
+
+-   **Evaluar la interacción entre aceleración, velocidad angular y altitud** en el contexto del despegue.
+
+-   **Identificar patrones en los cambios de inclinación (`Pitch`), balanceo (`Roll`) y guiñada (`Yaw`)** a medida que el avión gana altitud.
+
+-   **Explorar la influencia de los outliers previamente detectados**, determinando si representan eventos significativos en la dinámica del despegue.
+
+Esta exploración contribuirá a una mejor interpretación de los datos y facilitará la toma de decisiones sobre cómo tratar la información en modelos futuros, asegurando que los patrones dinámicos sean correctamente capturados y utilizados.
 
 ```{r}
 # Mostrar nombres de columnas en el dataset
@@ -947,8 +943,10 @@ colnames(data)
 ```
 
 ```{r}
-# Crear etiquetas de fases del vuelo basadas en altitud relativa
-data <- data %>%
+# Crear una copia del dataset original
+data_copy <- data
+# Crear etiquetas de fases del vuelo en la copia
+data_copy <- data_copy %>%
   mutate(FlightPhase = case_when(
     RelativeAltitude.meters. < 10 ~ "Aceleración Inicial",
     RelativeAltitude.meters. >= 10 & RelativeAltitude.meters. < 100 ~ "Despegue",
@@ -957,10 +955,10 @@ data <- data %>%
   ))
 
 # Verificar la distribución de las fases
-table(data$FlightPhase)
+table(data_copy$FlightPhase)
 
 # Inspeccionar las primeras filas con las nuevas etiquetas
-head(data)
+head(data_copy)
 
 ```
 
@@ -968,12 +966,12 @@ head(data)
 library(ggplot2)
 
 # Gráfico de aceleración en el eje X por fase del vuelo
-ggplot(data, aes(x = FlightPhase, y = accelX.g., fill = FlightPhase)) +
+ggplot(data_copy, aes(x = FlightPhase, y = accelX.g., fill = FlightPhase)) +
   geom_boxplot() +
   labs(title = "Distribución de Aceleración (Eje X) por Fase", x = "Fase del Vuelo", y = "Aceleración (g)")
 
 # Gráfico de orientación (Pitch) por fase del vuelo
-ggplot(data, aes(x = FlightPhase, y = Pitch.rads., fill = FlightPhase)) +
+ggplot(data_copy, aes(x = FlightPhase, y = Pitch.rads., fill = FlightPhase)) +
   geom_boxplot() +
   labs(title = "Distribución de Pitch por Fase", x = "Fase del Vuelo", y = "Pitch (rad)")
 
@@ -983,7 +981,7 @@ ggplot(data, aes(x = FlightPhase, y = Pitch.rads., fill = FlightPhase)) +
 library(ggplot2)
 
 # Gráfico de relación entre Pitch y Altitud por fase
-ggplot(data, aes(x = RelativeAltitude.meters., y = Pitch.rads., color = FlightPhase)) +
+ggplot(data_copy, aes(x = RelativeAltitude.meters., y = Pitch.rads., color = FlightPhase)) +
   geom_point() +
   labs(
     title = "Relación entre Altitud Relativa y Pitch por Fase",
@@ -992,7 +990,7 @@ ggplot(data, aes(x = RelativeAltitude.meters., y = Pitch.rads., color = FlightPh
   )
 
 # Gráfico de relación entre Aceleración en el Eje X y Roll
-ggplot(data, aes(x = accelX.g., y = Roll.rads., color = FlightPhase)) +
+ggplot(data_copy, aes(x = accelX.g., y = Roll.rads., color = FlightPhase)) +
   geom_point() +
   labs(
     title = "Relación entre Aceleración (Eje X) y Roll por Fase",
@@ -1004,7 +1002,7 @@ ggplot(data, aes(x = accelX.g., y = Roll.rads., color = FlightPhase)) +
 
 ```{r}
 # Calcular correlaciones por fase
-correlations_by_phase <- data %>%
+correlations_by_phase <- data_copy %>%
   group_by(FlightPhase) %>%
   summarise(
     Correlation_AccelX_Pitch = cor(accelX.g., Pitch.rads., use = "complete.obs"),
@@ -1036,7 +1034,27 @@ print(correlations_by_phase)
 
     -   Variables dinámicas como `accelX.g.`, `Pitch.rads.`, y `Roll.rads.` son fundamentales para describir las dinámicas del despegue y tienen potencial para ser clave en el modelo predictivo.
 
-# 9. Conclusiones
+# 9. Resumen y Conclusiones
+
+### **9.1 Resumen del Análisis Realizado**
+
+1.  **Eliminación de Columnas y Transformaciones Básicas**
+
+    -   Se eliminaron algunas variables irrelevantes para la fase de despegue.
+
+    -   Se realizaron transformaciones de tipo de dato (`chr` a `date` en variables temporales).
+
+    -   Se renombraron algunos registros para mejorar la legibilidad del dataset.
+
+2.  **Análisis Exploratorio de la Naturaleza de los Datos**
+
+    -   Se identificaron **outliers en variables clave** (`gyroZ.rad.s.`, `gyroY.rad.s.`, `accelUserX.g.`, `accelUserY.g.`, `magZ.µT.`), pero no se han imputado ni eliminado.
+
+    -   Se analizaron **correlaciones entre variables**, detectando posibles casos de colinealidad.
+
+    -   Se planteó la posibilidad de estudiar las **relaciones dinámicas en el despegue**, aunque no se han definido fases de vuelo dentro del dataset.
+
+### **9.2 Conclusiones**
 
 El análisis exploratorio del dataset revela varias observaciones clave que afectan la interpretación de las variables y su relación con los patrones dinámicos del sistema de transporte analizado. A continuación, se presentan las conclusiones organizadas en secciones temáticas:
 
@@ -1102,7 +1120,7 @@ El análisis exploratorio del dataset revela varias observaciones clave que afec
 
     -   Variables ambientales como `Pressure.kilopascals.` y `RelativeAltitude.meters.` pueden ser eliminadas o utilizadas solo en análisis específicos.
 
-**4. Transformaciones sugeridas**:
+### **9.3 Tranformaciones Sugeridas**
 
 1.  **RobustScaler**: Para variables con outliers significativos y asimetría extrema (`gyroX.rad.s.`, `gyroY.rad.s.`, `gyroZ.rad.s.`, `accelX.g.`, `accelY.g.`, `RelativeAltitude.meters.`). Esta técnica centra los datos usando la mediana y escala con el rango intercuartílico (IQR), siendo robusta frente a valores extremos.
 
@@ -1110,7 +1128,7 @@ El análisis exploratorio del dataset revela varias observaciones clave que afec
 
 3.  **Transformación logarítmica**: Aplicar logaritmos a variables con alta curtosis y dispersión (`accelX.g.`, `gyroZ.rad.s.`, `RelativeAltitude.meters.`) para reducir asimetría y mejorar su distribución.
 
-**5. Flujo de transformación**:
+### **9.4Flujo de transformación**:
 
 -   **Paso 1**: Filtrar los datos según el análisis manual de outliers, ajustando los valores detectados con winzorizacion.
 
@@ -1119,3 +1137,19 @@ El análisis exploratorio del dataset revela varias observaciones clave que afec
 -   **Paso 3**: Escalar todas las variables seleccionadas de manera consistente (RobustScaler o Min-Max) para garantizar uniformidad.
 
 -   **Paso 4**: Verificar la calidad de las transformaciones mediante visualizaciones y estadísticas descriptivas actualizadas.
+
+# 10. Descarga de dataset
+
+```{r}
+head(data)  # Primeras 6 filas
+tail(data)  # Últimas 6 filas
+```
+
+```{r}
+str(data)  # Muestra estructura del dataset
+```
+
+```{r}
+write.csv(data, "dataset_resultante_despegue_avion.csv", row.names = FALSE)
+
+```
