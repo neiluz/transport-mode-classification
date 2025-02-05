@@ -1,0 +1,474 @@
+---
+title: "Prediccion de Tipo de Transporte - Proyecto de Transporte"
+output: html_notebook
+---
+
+### General: Objetivos del Proyecto y Definición de Variables
+
+El objetivo principal de este proyecto es desarrollar un modelo basado en **Máquinas de Vectores de Soporte (SVM)** para predecir el **modo de transporte** utilizado por un individuo en función de los datos recopilados por sensores de dispositivos móviles. Se busca analizar cómo las diferentes señales captadas por el acelerómetro, giróscopo, barómetro, GPS y magnetómetro pueden ser utilizadas para inferir con precisión el medio de transporte en uso.
+
+Para lograr esto, se cuenta con un conjunto de datos que incluye:
+
+1.  **Registro Temporal**
+
+    -   Cada observación está asociada a un instante de tiempo específico.
+
+2.  **Datos de Movimiento y Orientación**
+
+    -   **Acelerómetro**: Componentes X, Y, Z del vector aceleración.
+
+    -   **Giróscopo**: Velocidad angular en los ejes X, Y, Z y su derivada.
+
+    -   **Matriz de Rotación y Cuaterniones**: Representan la orientación tridimensional del dispositivo.
+
+3.  **Datos de Ubicación y Contexto**
+
+    -   **GPS**: Coordenadas de latitud y longitud, velocidad, altitud y rumbo.
+
+    -   **Presión Atmosférica**: Valores obtenidos del barómetro, junto con la altitud relativa.
+
+    -   **Campo Magnético Terrestre**: Medición en los ejes X, Y, Z.
+
+4.  **Variables Categóricas**
+
+    -   **Modo de Transporte**: La categoría que se busca predecir (caminar, bicicleta, automóvil, etc.).
+
+    -   **Nivel de Confianza**: Un indicador de la precisión estimada para la clasificación del transporte en los datos originales.
+
+### Objetivo Notebook:
+
+# **1. Carga de librerías**
+
+```{r}
+# Lista de paquetes necesarios
+necessary_packages <- c("dplyr", "caret", "e1071", "robustbase", "ggplot2", "data.table")
+
+# Instalar paquetes que no están instalados
+new_packages <- necessary_packages[!(necessary_packages %in% installed.packages()[, "Package"])]
+if (length(new_packages) > 0) {
+  install.packages(new_packages)
+}
+
+# Cargar todos los paquetes
+lapply(necessary_packages, library, character.only = TRUE)
+```
+
+```{r}
+# Cargar las librerías necesarias
+library(caret)      # Para división estratificada y evaluación de modelos
+library(scales)     # Para Min-Max Scaling
+library(e1071)      # Para entrenar SVM
+library(randomForest)  # Para obtener la importancia de las variables
+library(dplyr)      # Para manipulación de datos
+# Cargar la librería
+library(visdat)
+# Cargar la librería
+library(tidyr)
+# Cargar el paquete 'car'
+library(car)
+library(ggplot2)
+library(stringr) #Cambiar variables
+```
+
+# 2. Cargar el dataset
+
+```{r}
+# Ruta del archivo CSV (modificar según tu sistema)
+ruta_dataset <- "C:/Users/Lenovo/Documents/IT Academy/Datos proyecto 8/proyect8/dataset_combinado.csv"
+
+data <- read.csv(ruta_dataset)
+
+# Resumen del dataset
+cat("### Información General del Dataset")
+dim(data) # Dimensiones del dataset
+str(data) # Estructura del dataset
+
+```
+
+```{r}
+summary(data) # Resumen estadístico básico
+```
+
+```{r}
+# Reemplazar las categorías 'Coche autopista' y 'Coche carretera' por 'Coche'
+data <- data %>%
+  mutate(ActivityType = str_replace(ActivityType, "Coche autopista|Coche carretera", "Coche"))
+
+# Verificar los primeros valores de ActivityType después del reemplazo
+head(data$ActivityType)
+```
+
+# 3. Análisis de Datos
+
+## 3.1 Detección de Valores faltantes
+
+Identificar valores faltantes es crucial porque pueden afectar el rendimiento del modelo predictivo. Este paso ayuda a decidir estrategias para imputar o manejar estos valores.
+
+```{r}
+cat("### Análisis de Valores Faltantes\n")
+# Resumen de valores faltantes por columna
+print(sapply(data, function(x) sum(is.na(x))))
+
+# Visualización de valores faltantes mejorada
+vis_miss(data) +
+  ggtitle("Mapa de Valores Faltantes") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 8), # Ajuste de las etiquetas del eje X
+    axis.text.y = element_text(size = 10),                       # Ajuste de las etiquetas del eje Y
+    plot.title = element_text(hjust = 0.5, size = 14)            # Centrar y ajustar tamaño del título
+  )
+
+```
+
+El análisis muestra que no hay valores nulos en el dataset. Esto significa que todas las variables contienen información completa para las 816 observaciones registradas. Este resultado asegura que no será necesario realizar técnicas de imputación de datos.
+
+## 3.2 Detección de Outliers Univariantes
+
+Usaremos el rango intercuartílico (IQR) para identificar outliers y calcular el porcentaje de valores extremos en cada variable numérica.
+
+```{r}
+if (ncol(num_data) > 0) {
+  cat("### Análisis de Outliers\n")
+  
+  # Cálculo de outliers por IQR
+  outlier_detection <- num_data %>%
+    summarise(across(everything(), ~ {
+      q1 <- quantile(.x, 0.25, na.rm = TRUE)
+      q3 <- quantile(.x, 0.75, na.rm = TRUE)
+      iqr <- q3 - q1
+      sum(.x < (q1 - 1.5 * iqr) | .x > (q3 + 1.5 * iqr), na.rm = TRUE) / length(.x) * 100
+    }))
+  
+  # Transponer la tabla
+  outlier_detection <- as.data.frame(t(outlier_detection))
+  outlier_detection$Variable <- rownames(outlier_detection)
+  rownames(outlier_detection) <- NULL
+  
+  # Reordenar las columnas
+  outlier_detection <- outlier_detection %>%
+    select(Variable, `Outliers (%)` = V1) %>%
+    arrange(desc(`Outliers (%)`))  # Ordenar de mayor a menor
+  
+  # Mostrar la tabla
+  print(outlier_detection)
+}
+```
+
+**Visualización de Outliers**
+
+Utilizaremos boxplots para visualizar los outliers en cada variable numérica.
+
+```{r}
+if (ncol(num_data) > 0) {
+  # Transformar datos a formato largo
+  num_data_long <- num_data %>%
+    pivot_longer(cols = everything(), names_to = "Variable", values_to = "Valor")
+  
+  # Dividir las variables en grupos de 6
+  variable_groups <- split(unique(num_data_long$Variable), ceiling(seq_along(unique(num_data_long$Variable)) / 6))
+
+  for (group in variable_groups) {
+    # Filtrar las variables del grupo actual
+    group_data_long <- num_data_long %>% filter(Variable %in% group)
+    
+    # Crear los boxplots
+    print(
+      ggplot(group_data_long, aes(x = Variable, y = Valor)) +
+        geom_boxplot(outlier.colour = "red", outlier.size = 1.5, fill = "lightblue") +
+        theme_minimal() +
+        labs(
+          title = "Visualización de Outliers",
+          x = "Variable",
+          y = "Valores"
+        ) +
+        theme(
+          plot.title = element_text(size = 8, hjust = 0.5),
+          axis.text.x = element_text(angle = 0, hjust = 1)
+        ) +
+        facet_wrap(~ Variable, scales = "free", ncol = 3)  # Cambia "ncol" a 2 o 3 según el diseño que prefieras
+    )
+  }
+} else {
+  cat("No hay variables numéricas en el dataset.\n")
+}
+```
+
+## **3.3 Analisisis de Colinealidad**
+
+```{r}
+library(dplyr)
+
+# Verificar que el dataset existe
+if (exists("data")) {
+  # Filtrar las variables numéricas y eliminar la variable dependiente (ActivityType)
+  num_data_filtered <- data %>%
+    select(where(is.numeric)) %>%
+    mutate(dummy_target = runif(nrow(.), 0, 1)) # Crear una variable dummy temporal
+
+  # Validar si hay suficientes variables para calcular el modelo
+  if (ncol(num_data_filtered) > 1) {
+    # Crear un modelo de regresión con las variables predictoras
+    vif_model <- lm(dummy_target ~ ., data = num_data_filtered)
+    
+    # Calcular los valores de VIF
+    vif_values <- vif(vif_model)
+    
+    # Imprimir los valores de VIF
+    print("### Factores de Inflación de Varianza (VIF)")
+    print(vif_values)
+    
+    # Identificar variables con alta colinealidad (VIF > 10 como umbral común)
+    high_vif <- vif_values[vif_values > 10]
+    if (length(high_vif) > 0) {
+      cat("\nVariables con alta colinealidad (VIF > 10):\n")
+      print(high_vif)
+    } else {
+      cat("\nNo se encontraron variables con alta colinealidad (VIF <= 10).\n")
+    }
+  } else {
+    cat("No hay suficientes variables numéricas para calcular el VIF.\n")
+  }
+} else {
+  cat("El dataset 'data' no existe en el entorno.\n")
+}
+```
+
+**Preguntar??**
+
+## **3.4** Distribución de las Clases en `ActivityType`
+
+```{r}
+# Crear un gráfico de barras para la variable 'target_variable' con un solo color
+ggplot(data, aes(x = ActivityType)) + 
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Distribución de las Clases en la Variable `target_variable`", 
+       x = "Clases", y = "Frecuencia") +
+  theme_minimal()
+
+```
+
+> **Explicar si se realiza el balanceo antes del modelo o despues?**
+
+# 4. Imputacion de Variables
+
+## 4.1 Imputacion de Outliers
+
+De acuerdo a los resultados del analisis descrittivos, las variables se debe corregir los outileres y existen variables con alta colinealidad que se recomiendan eliminar.
+
+```{r}
+# Función para aplicar winsorización
+winsorize <- function(x) {
+  q1 <- quantile(x, 0.01)  # Percentil 1
+  q99 <- quantile(x, 0.99)  # Percentil 99
+  pmax(pmin(x, q99), q1)  # Limitar valores fuera de estos percentiles
+}
+
+# Aplicar winsorización a las variables específicas
+data$gyroZ.rad.s. <- winsorize(data$gyroZ.rad.s.)
+data$gyroY.rad.s. <- winsorize(data$gyroY.rad.s.)
+data$accelUserZ.g. <- winsorize(data$accelUserZ.g.)
+data$accelUserX.g. <- winsorize(data$accelUserX.g.)
+data$accelUserY.g. <- winsorize(data$accelUserY.g.)
+data$magZ.µT. <- winsorize(data$magZ.µT.)
+data$m31 <- winsorize(data$m31)
+data$gyroX.rad.s. <- winsorize(data$gyroX.rad.s.)
+data$accelZ.g. <- winsorize(data$accelZ.g.)
+data$calMagZ.µT. <- winsorize(data$calMagZ.µT.)
+data$Roll.rads. <- winsorize(data$Roll.rads.)
+data$m33 <- winsorize(data$m33)
+data$Pitch.rads. <- winsorize(data$Pitch.rads.)
+
+# Verificar las primeras filas después de aplicar winsorización
+head(data)
+```
+
+```{r}
+if (ncol(num_data) > 0) {
+  # Transformar datos a formato largo
+  num_data_long <- num_data %>%
+    pivot_longer(cols = everything(), names_to = "Variable", values_to = "Valor")
+  
+  # Dividir las variables en grupos de 6
+  variable_groups <- split(unique(num_data_long$Variable), ceiling(seq_along(unique(num_data_long$Variable)) / 6))
+
+  for (group in variable_groups) {
+    # Filtrar las variables del grupo actual
+    group_data_long <- num_data_long %>% filter(Variable %in% group)
+    
+    # Crear los boxplots
+    print(
+      ggplot(group_data_long, aes(x = Variable, y = Valor)) +
+        geom_boxplot(outlier.colour = "red", outlier.size = 1.5, fill = "lightblue") +
+        theme_minimal() +
+        labs(
+          title = "Visualización de Outliers",
+          x = "Variable",
+          y = "Valores"
+        ) +
+        theme(
+          plot.title = element_text(size = 8, hjust = 0.5),
+          axis.text.x = element_text(angle = 0, hjust = 1)
+        ) +
+        facet_wrap(~ Variable, scales = "free", ncol = 3)  # Cambia "ncol" a 2 o 3 según el diseño que prefieras
+    )
+  }
+} else {
+  cat("No hay variables numéricas en el dataset.\n")
+}
+```
+
+# 5. Escalado de Datos
+
+Para los **outliers**, aplicamos **RobustScaler**, y para las otras variables, utilizamos **Min-Max Scaling.**
+
+```{r}
+# Convertir las variables categóricas a factor
+data$ActivityType <- factor(data$ActivityType)
+data$ActivityConfidence <- factor(data$ActivityConfidence)  # Convertir ActivityConfidence a factor
+
+# Identificar las variables con outliers
+variables_with_outliers <- c('gyroZ.rad.s.', 'gyroY.rad.s.', 'accelUserZ.g.', 'accelUserX.g.', 'accelUserY.g.', 
+                            'magZ.µT.', 'calMagZ.µT.', 'Roll.rads.', 'm31', 'gyroX.rad.s.', 'Pitch.rads.')
+
+# Función para aplicar RobustScaler
+robust_scaler <- function(x) {
+  median_val <- median(x, na.rm = TRUE)
+  mad_val <- mad(x, na.rm = TRUE)
+  (x - median_val) / mad_val
+}
+
+# Aplicar RobustScaler a las variables con outliers
+data[variables_with_outliers] <- lapply(data[variables_with_outliers], robust_scaler)
+
+# Escalado Min-Max para las otras variables (sin outliers)
+# Filtrar solo las columnas numéricas (eliminar las categóricas)
+num_variables <- sapply(data, is.numeric)
+variables_without_outliers <- names(data)[num_variables & !names(data) %in% variables_with_outliers]
+
+# Aplicar Min-Max Scaling a las variables numéricas sin outliers
+data[variables_without_outliers] <- lapply(data[variables_without_outliers], rescale)
+
+# Verificar las primeras filas después de la transformación
+head(data)
+```
+
+# 6. Dividir los datos en entrenamiento y test
+
+```{r}
+set.seed(123)
+
+# Crear la partición (estratificación)
+split <- createDataPartition(data$ActivityType, p = 0.8, list = FALSE)  # 80% entrenamiento, 20% test
+train_set <- data[split, ]
+test_set <- data[-split, ]
+```
+
+# 7. Modelo SVM
+
+## 7.1 entrenar el modelo
+
+```{r}
+# Medir el tiempo de entrenamiento
+train_time <- system.time({
+  svm_model <- svm(ActivityType ~ ., data = train_set)
+})
+
+# Medir el tiempo de predicción
+predict_time <- system.time({
+  predictions <- predict(svm_model, test_set)
+})
+
+# Imprimir los tiempos
+print(train_time)
+print(predict_time)
+```
+
+## 7.2 Evaluar el rendimiento del modelo
+
+```{r}
+# Evaluar el rendimiento del modelo
+confusionMatrix(predictions, test_set$ActivityType)
+
+```
+
+**Aunque es muy perfecto, probablemete el desblanceo de los dato este sesgado a predecir una sola clase, chequear el balance y crossval. ?**
+
+```{r}
+# Instalar pROC si no lo tienes
+install.packages("pROC")
+library(pROC)
+
+```
+
+```{r}
+# Obtener probabilidades predichas para cada clase
+probabilities <- predict(svm_model, test_set, type = "prob")
+
+# Verificar la estructura de las probabilidades
+str(probabilities)
+
+```
+
+**CREAR CURVA ROC PARA CEHQUEAR OVERFITING**
+
+# 8. Evaluación de la importancia de las variables utilizando RF
+
+```{r}
+# Entrenar el modelo Random Forest para obtener la importancia de las variables
+rf_model <- randomForest(ActivityType ~ ., data = train_set)
+
+# Ver la importancia de las variables
+imp <- importance(rf_model)
+
+# Ver las primeras filas de la importancia
+imp
+```
+
+```{r}
+str(imp)
+```
+
+```{r}
+# Convertir el vector de importancias en un data frame
+imp_df <- data.frame(Variable = rownames(imp), MeanDecreaseGini = imp[, 1])
+
+# Ordenar el data frame por la importancia de mayor a menor
+imp_sorted <- imp_df[order(imp_df$MeanDecreaseGini, decreasing = TRUE), ]
+
+# Graficar la importancia de las variables
+barplot(imp_sorted$MeanDecreaseGini, 
+        main = "Importancia de las Variables", 
+        las = 2,                       # Rotar nombres de las variables
+        col = "skyblue",               # Color de las barras
+        names.arg = imp_sorted$Variable,  # Nombres de las variables
+        cex.names = 0.7,               # Ajustar tamaño de los nombres
+        horiz = TRUE,                  # Barra horizontal
+        cex.axis = 0.7,                # Ajustar tamaño de los números del eje
+        xlab = "Importancia",          # Título para el eje X
+        ylab = "Variables")            # Título para el eje Y
+
+
+```
+
+1.  <div>
+
+    > **Puntos de Mejoras proximate iteracion:**
+    >
+    > 1.  **Chequear el balanceo**
+    >
+    > 2.  **Incluir los dataset restantes**
+    >
+    > 3.  **Chequear en eliminar colinealidad antes de modelar**
+    >
+    > 4.  **Probar modelo con las variables mas importante del RF**
+    >
+    > 5.  **Probar con difrentes kernel**
+    >
+    > 6.  **Cheaquear ROC para el overfitting, se presume por los resultados tan sesgados**
+    >
+    > 7.  **Evaluar aplicar Crossval**
+    >
+    > 8.  **SEGUIR ITERANDO**
+
+    </div>
