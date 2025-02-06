@@ -395,6 +395,80 @@ confusionMatrix(predictions, test_set$ActivityType)
 **Aunque es muy perfecto, probablemete el desblanceo de los dato este sesgado a predecir una sola clase, chequear el balance y crossval. ?**
 
 ```{r}
+# Crear una malla de puntos en el espacio 2D
+x_min <- min(train_set$accelX.g.)
+x_max <- max(train_set$accelX.g.)
+y_min <- min(train_set$accelY.g.)
+y_max <- max(train_set$accelY.g.)
+
+grid <- expand.grid(
+  accelX.g. = seq(x_min, x_max, length.out = 100),
+  accelY.g. = seq(y_min, y_max, length.out = 100)
+)
+
+# Obtener las variables predictoras usadas en el modelo (excluyendo ActivityType)
+predictors <- setdiff(names(train_set), "ActivityType")
+
+# Identificar variables numéricas y categóricas
+num_vars <- names(train_set)[sapply(train_set, is.numeric)]
+cat_vars <- setdiff(predictors, num_vars)
+
+# Crear un dataframe con todas las columnas necesarias
+grid_full <- as.data.frame(matrix(ncol = length(predictors), nrow = nrow(grid)))
+names(grid_full) <- predictors
+
+# Asignar valores de accelX.g. y accelY.g. desde la malla de puntos
+grid_full$accelX.g. <- grid$accelX.g.
+grid_full$accelY.g. <- grid$accelY.g.
+
+# Para las variables numéricas, asignar el promedio de train_set
+for (col in num_vars) {
+  if (!(col %in% c("accelX.g.", "accelY.g."))) {
+    grid_full[[col]] <- mean(train_set[[col]], na.rm = TRUE)
+  }
+}
+
+# Para las variables categóricas, asignar la categoría más frecuente de train_set
+for (col in cat_vars) {
+  most_frequent <- names(which.max(table(train_set[[col]])))  # Obtener la categoría más frecuente
+  grid_full[[col]] <- factor(rep(most_frequent, nrow(grid_full)), levels = levels(train_set[[col]]))
+}
+
+# Asegurar que las columnas de grid_full coincidan con las de train_set (menos ActivityType)
+grid_full <- grid_full[, names(train_set)[names(train_set) != "ActivityType"]]
+
+# Predecir con el modelo entrenado
+grid_full$ActivityType <- predict(svm_model, newdata = grid_full)
+
+# Graficar los datos de entrenamiento y la frontera de decisión
+ggplot(train_set, aes(x = accelX.g., y = accelY.g., color = ActivityType)) +
+  geom_point(alpha = 0.6) +
+  geom_contour(data = grid_full, aes(z = as.numeric(ActivityType)), bins = 1) +
+  labs(title = "SVM: Hiperplanos de Decisión en 2D (Solo Train)", x = "accelX.g.", y = "accelY.g.") +
+  theme_minimal()
+
+
+
+```
+
+```{r}
+# Asegúrate de que tu modelo esté entrenado con solo dos variables para graficarlo
+# Por ejemplo, seleccionemos dos variables específicas para entrenamiento
+train_set_2d <- train_set[, c("accelX.g.", "accelY.g.", "ActivityType")]
+
+# Volver a entrenar el modelo usando solo las dos variables seleccionadas
+svm_model_2d <- svm(ActivityType ~ accelX.g. + accelY.g., data = train_set_2d, kernel = "linear")
+
+# Graficar el modelo y los datos
+plot(svm_model_2d, train_set_2d, main = "SVM classification plot")
+
+# Agregar una leyenda manualmente
+legend("topright", legend = levels(train_set_2d$ActivityType),
+       col = 1:length(levels(train_set_2d$ActivityType)), pch = 1)
+
+```
+
+```{r}
 # Instalar pROC si no lo tienes
 install.packages("pROC")
 library(pROC)
@@ -459,16 +533,20 @@ barplot(imp_sorted$MeanDecreaseGini,
     >
     > 2.  **Incluir los dataset restantes**
     >
-    > 3.  **Chequear en eliminar colinealidad antes de modelar**
+    > 3.  **Incluir la frecuencia de herzios**
     >
-    > 4.  **Probar modelo con las variables mas importante del RF**
+    > 4.  **Confidence Eliminar**
     >
-    > 5.  **Probar con difrentes kernel**
+    > 5.  **Chequear en eliminar colinealidad antes de modelar**
     >
-    > 6.  **Cheaquear ROC para el overfitting, se presume por los resultados tan sesgados**
+    > 6.  **Probar modelo con las variables mas importante del RF**
     >
-    > 7.  **Evaluar aplicar Crossval**
+    > 7.  **Probar con difrentes kernel: Simoidales Gamma, Radial Gammna Dispersion.**
     >
-    > 8.  **SEGUIR ITERANDO**
+    > 8.  **Cheaquear ROC para el overfitting, se presume por los resultados tan sesgados**
+    >
+    > 9.  **Evaluar aplicar Crossval**
+    >
+    > 10. **SEGUIR ITERANDO**
 
     </div>
