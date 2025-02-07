@@ -74,7 +74,9 @@ library(stringr) #Cambiar variables
 
 ```{r}
 # Ruta del archivo CSV (modificar según tu sistema)
-ruta_dataset <- "C:/Users/Lenovo/Documents/IT Academy/Datos proyecto 8/proyect8/dataset_combinado.csv"
+ruta_dataset <- "C:/Users/Lenovo/Documents/IT Academy/Datos proyecto 8/proyect8/input_data/dataframes_modificado.csv"
+data <- read.csv(ruta_dataset)
+
 
 data <- read.csv(ruta_dataset)
 
@@ -89,13 +91,44 @@ str(data) # Estructura del dataset
 summary(data) # Resumen estadístico básico
 ```
 
+## 2.1 Adecuacion del dataset
+
 ```{r}
+# Eliminar la columna "ActivityConfidence"
+data <- data[, !names(data) %in% "ActivityConfidence"]
+
+# Crear la nueva columna "herzios" basada en "ActivityType"
+data$herzios <- ifelse(data$ActivityType == "Avion", 10,
+                    ifelse(data$ActivityType == "Coche autopista", 2,
+                    ifelse(data$ActivityType == "Autobus", 50,
+                    ifelse(data$ActivityType == "Bicleta", 50,
+                    ifelse(data$ActivityType == "Andando", 100,
+                    ifelse(data$ActivityType == "Coche Urbano 100", 100,
+                    ifelse(data$ActivityType == "Coche Urbano 250", 250,
+                    ifelse(data$ActivityType == "Coche carretera", 100, 0))))))))
+```
+
+```{r}
+data
+```
+
+```{r}
+data %>%
+  count(ActivityType, sort = TRUE)
+
 # Reemplazar las categorías 'Coche autopista' y 'Coche carretera' por 'Coche'
 data <- data %>%
-  mutate(ActivityType = str_replace(ActivityType, "Coche autopista|Coche carretera", "Coche"))
+  mutate(ActivityType = str_replace(ActivityType, "Coche autopista|Coche carretera", "Coche_autopista"))
+
+data <- data %>%
+  mutate(ActivityType = str_replace(ActivityType, "Coche Urbano 250|Coche Urbano 100", "Coche_urbano"))
 
 # Verificar los primeros valores de ActivityType después del reemplazo
 head(data$ActivityType)
+```
+
+```{r}
+str(data)
 ```
 
 # 3. Análisis de Datos
@@ -128,6 +161,9 @@ El análisis muestra que no hay valores nulos en el dataset. Esto significa que 
 Usaremos el rango intercuartílico (IQR) para identificar outliers y calcular el porcentaje de valores extremos en cada variable numérica.
 
 ```{r}
+# Extraer solo las columnas numéricas
+num_data <- data %>% select(where(is.numeric))
+
 if (ncol(num_data) > 0) {
   cat("### Análisis de Outliers\n")
   
@@ -234,7 +270,11 @@ if (exists("data")) {
 }
 ```
 
-**Preguntar??**
+> En el análisis de los datos, hemos observado que algunas variables, como `qX`, `qY` y `gyroX.rad.s.`, están fuertemente correlacionadas entre sí y también con otras variables clave del modelo, como las mediciones magnéticas (`magX.µT.`, `magY.µT.`). Esta alta colinealidad genera un aumento en los **Factores de Inflación de Varianza (VIF)**, con varios valores superiores a 10. Esto indica que algunas de estas variables están aportando la misma información, lo que provoca redundancia en el modelo.
+>
+> La presencia de estas variables altamente correlacionadas puede afectar la estabilidad y precisión de las predicciones. En particular, las variables relacionadas con las matrices de rotación y el campo magnético tienden a influir de manera similar, lo que dificulta que el modelo identifique correctamente las variables más importantes.
+>
+> Para mejorar la precisión y estabilidad del modelo, sería recomendable eliminar estas variables colineales, como `qX`, `qY` y `gyroX.rad.s.`, así como las variables magnéticas. De esta forma, reducimos la redundancia, lo que permitirá que el modelo funcione de manera más eficiente y que los resultados sean más fáciles de interpretar.
 
 ## **3.4** Distribución de las Clases en `ActivityType`
 
@@ -242,19 +282,27 @@ if (exists("data")) {
 # Crear un gráfico de barras para la variable 'target_variable' con un solo color
 ggplot(data, aes(x = ActivityType)) + 
   geom_bar(fill = "skyblue", color = "black") +
-  labs(title = "Distribución de las Clases en la Variable `target_variable`", 
+  labs(title = "Distribución de las Clases en la Variable `ActivityType`", 
        x = "Clases", y = "Frecuencia") +
   theme_minimal()
 
 ```
 
-> **Explicar si se realiza el balanceo antes del modelo o despues?**
+> El gráfico muestra la distribución de las clases en la variable objetivo `ActivityType`. Es evidente que existe un desbalance significativo en los datos, donde la clase `Coche_urbano` domina ampliamente con la mayor cantidad de observaciones, seguida por `Andando` y `Bicicleta`. En contraste, las clases `Avión` y `Coche_autopista` tienen una representación mucho menor, lo que podría generar desafíos para el modelo al clasificar estas clases minoritarias.
+>
+> ### **Implicaciones del Desbalance**
+>
+> 1.  **Riesgo de Sesgo hacia la Clase Mayoritaria:**\
+>     El modelo puede sesgarse hacia la clase mayoritaria (`Coche_urbano`) durante el entrenamiento, ya que la mayoría de los ejemplos pertenecen a esta clase. Esto podría conducir a una alta precisión global aparente, pero con un rendimiento deficiente en las clases minoritarias (`Avión`, `Coche_autopista`).
+>
+> 2.  **Impacto en Métricas como Sensibilidad y F1-score:**\
+>     El desbalance puede afectar negativamente métricas como la sensibilidad y el F1-score para las clases menos representadas, lo que es crítico en aplicaciones donde la detección precisa de estas clases es importante.
 
 # 4. Imputacion de Variables
 
 ## 4.1 Imputacion de Outliers
 
-De acuerdo a los resultados del analisis descrittivos, las variables se debe corregir los outileres y existen variables con alta colinealidad que se recomiendan eliminar.
+La imputación mediante **winsorización** es un enfoque útil para tratar los outliers extremos en los datos. En este caso, se ha aplicado winsorización a las variables con más del 10% de outliers, como `gyroZ.rad.s.`, `Roll.rads.`, `gyroX.rad.s.`, entre otras. Este proceso consiste en limitar los valores de las variables fuera de un rango específico, utilizando los percentiles 1 y 99. De esta manera, los valores extremos son reemplazados por los valores más cercanos en esos percentiles, lo que reduce el impacto de los outliers sin eliminar completamente los datos.
 
 ```{r}
 # Función para aplicar winsorización
@@ -264,23 +312,48 @@ winsorize <- function(x) {
   pmax(pmin(x, q99), q1)  # Limitar valores fuera de estos percentiles
 }
 
-# Aplicar winsorización a las variables específicas
-data$gyroZ.rad.s. <- winsorize(data$gyroZ.rad.s.)
-data$gyroY.rad.s. <- winsorize(data$gyroY.rad.s.)
-data$accelUserZ.g. <- winsorize(data$accelUserZ.g.)
-data$accelUserX.g. <- winsorize(data$accelUserX.g.)
-data$accelUserY.g. <- winsorize(data$accelUserY.g.)
-data$magZ.µT. <- winsorize(data$magZ.µT.)
-data$m31 <- winsorize(data$m31)
-data$gyroX.rad.s. <- winsorize(data$gyroX.rad.s.)
-data$accelZ.g. <- winsorize(data$accelZ.g.)
-data$calMagZ.µT. <- winsorize(data$calMagZ.µT.)
-data$Roll.rads. <- winsorize(data$Roll.rads.)
-data$m33 <- winsorize(data$m33)
-data$Pitch.rads. <- winsorize(data$Pitch.rads.)
+# Lista de columnas a winsorizar
+columns_to_winsorize <- c("gyroZ.rad.s.", "Roll.rads.", "m13", "gyroX.rad.s.", "gyroY.rad.s.", 
+                          "accelX.g.", "m32", "qX", "magZ.µT.", "qY", "accelUserX.g.", 
+                          "accelUserZ.g.", "accelZ.g.", "magY.µT.", "m33", "accelUserY.g.")
+
+# Aplicar winsorización solo a las columnas que existen en el dataset
+columns_to_winsorize <- columns_to_winsorize[columns_to_winsorize %in% colnames(data)]
+
+# Aplicar la función de winsorización a las columnas seleccionadas
+data[columns_to_winsorize] <- lapply(data[columns_to_winsorize], winsorize)
 
 # Verificar las primeras filas después de aplicar winsorización
 head(data)
+
+```
+
+```{r}
+if (ncol(num_data) > 0) {
+  cat("### Análisis de Outliers\n")
+  
+  # Cálculo de outliers por IQR
+  outlier_detection <- num_data %>%
+    summarise(across(everything(), ~ {
+      q1 <- quantile(.x, 0.25, na.rm = TRUE)
+      q3 <- quantile(.x, 0.75, na.rm = TRUE)
+      iqr <- q3 - q1
+      sum(.x < (q1 - 1.5 * iqr) | .x > (q3 + 1.5 * iqr), na.rm = TRUE) / length(.x) * 100
+    }))
+  
+  # Transponer la tabla
+  outlier_detection <- as.data.frame(t(outlier_detection))
+  outlier_detection$Variable <- rownames(outlier_detection)
+  rownames(outlier_detection) <- NULL
+  
+  # Reordenar las columnas
+  outlier_detection <- outlier_detection %>%
+    select(Variable, `Outliers (%)` = V1) %>%
+    arrange(desc(`Outliers (%)`))  # Ordenar de mayor a menor
+  
+  # Mostrar la tabla
+  print(outlier_detection)
+}
 ```
 
 ```{r}
@@ -318,6 +391,33 @@ if (ncol(num_data) > 0) {
 }
 ```
 
+## 4.2 Eliminacion de Vairables 
+
+Las variables `qX`, `qY` y `qZ` serán eliminadas debido a su alta correlación con las **matrices de rotación**. Estas variables aportan información redundante al modelo y, para evitar problemas de multicolinealidad, se ha decidido priorizar las **matrices de rotación**, que ya encapsulan la información necesaria para describir la orientación del objeto en movimiento.
+
+Por otro lado, las variables asociadas al **campo magnético** (`magX.µT.`, `magY.µT.`, `magZ.µT.`, `calMagX.µT.`, `calMagY.µT.`, `calMagZ.µT.`) también serán eliminadas, pero por un motivo distinto. Aunque estas variables no están directamente relacionadas con las matrices de rotación, el campo magnético tiene un **impacto significativo en la clasificación de los tipos de transporte**. Las señales magnéticas pueden ser similares entre distintos medios de transporte, como coches, trenes o aviones, lo que puede generar confusión en el modelo. Al eliminar estas variables, se evita que el modelo dependa de estas señales que pueden no ser determinantes para la tarea de clasificación.
+
+```{r}
+# Eliminar las columnas especificadas del dataset
+columns_to_remove <- c("qX", "qY", "qZ", "qW", "magX.µT.", "magY.µT.", "magZ.µT.", 
+                       "calMagX.µT.", "calMagY.µT.", "calMagZ.µT.")
+
+# Eliminar las columnas del dataset
+data <- data[, !(colnames(data) %in% columns_to_remove)]
+
+# Verificar las primeras filas después de eliminar las columnas
+head(data)
+```
+
+```{r}
+# Guardar el dataset modificado en el directorio de trabajo actual
+write.csv(data, "data_vars_eliminadas.csv", row.names = FALSE)
+
+# Mostrar el directorio de trabajo actual
+cat("El dataset ha sido guardado en el directorio de trabajo actual:", getwd())
+
+```
+
 # 5. Escalado de Datos
 
 Para los **outliers**, aplicamos **RobustScaler**, y para las otras variables, utilizamos **Min-Max Scaling.**
@@ -325,11 +425,10 @@ Para los **outliers**, aplicamos **RobustScaler**, y para las otras variables, u
 ```{r}
 # Convertir las variables categóricas a factor
 data$ActivityType <- factor(data$ActivityType)
-data$ActivityConfidence <- factor(data$ActivityConfidence)  # Convertir ActivityConfidence a factor
 
 # Identificar las variables con outliers
-variables_with_outliers <- c('gyroZ.rad.s.', 'gyroY.rad.s.', 'accelUserZ.g.', 'accelUserX.g.', 'accelUserY.g.', 
-                            'magZ.µT.', 'calMagZ.µT.', 'Roll.rads.', 'm31', 'gyroX.rad.s.', 'Pitch.rads.')
+variables_with_outliers <- c("gyroZ.rad.s.", "Roll.rads.", "m13", "gyroX.rad.s.",                              "gyroY.rad.s.", "accelX.g.", "m32", "accelUserX.g.", 
+                            "accelUserZ.g.", "accelZ.g.", "m33", "accelUserY.g.")
 
 # Función para aplicar RobustScaler
 robust_scaler <- function(x) {
@@ -353,6 +452,19 @@ data[variables_without_outliers] <- lapply(data[variables_without_outliers], res
 head(data)
 ```
 
+```{r}
+summary(data)
+```
+
+```{r}
+# Verificar el rango de las variables con Min-Max Scaling
+sapply(data[variables_without_outliers], function(x) range(x, na.rm = TRUE))
+
+# Verificar las estadísticas básicas de las variables con RobustScaler
+sapply(data[variables_with_outliers], summary)
+
+```
+
 # 6. Dividir los datos en entrenamiento y test
 
 ```{r}
@@ -369,14 +481,14 @@ test_set <- data[-split, ]
 ## 7.1 entrenar el modelo
 
 ```{r}
-# Medir el tiempo de entrenamiento
+# Medir el tiempo de entrenamiento con probabilidad habilitada
 train_time <- system.time({
-  svm_model <- svm(ActivityType ~ ., data = train_set)
+  svm_model <- svm(ActivityType ~ ., data = train_set, probability = TRUE)  # Activar probabilidades
 })
 
 # Medir el tiempo de predicción
 predict_time <- system.time({
-  predictions <- predict(svm_model, test_set)
+  predictions <- predict(svm_model, test_set, probability = TRUE)  # Obtener predicciones con probabilidades
 })
 
 # Imprimir los tiempos
@@ -392,7 +504,17 @@ confusionMatrix(predictions, test_set$ActivityType)
 
 ```
 
-**Aunque es muy perfecto, probablemete el desblanceo de los dato este sesgado a predecir una sola clase, chequear el balance y crossval. ?**
+El análisis de la matriz de confusión muestra que el modelo alcanzó una precisión perfecta (Accuracy = 1) con valores de sensibilidad y especificidad de 1.0000 para todas las clases. Sin embargo, la prevalencia de las clases indica un **desbalance significativo** en los datos. Por ejemplo, la clase mayoritaria (`Coche_urbano`) representa el 48.23% de las instancias, mientras que las clases minoritarias, como `Avión` (3.19%) y `Bicicleta` (11.72%), tienen una representación considerablemente menor. Este desbalance puede no afectar el rendimiento actual debido a la alta diferenciación en las características, pero podría impactar la **generalización del modelo** en datos no vistos o en escenarios con distribuciones de clases más equilibradas.
+
+Para abordar este problema y garantizar la robustez del modelo, se propone la implementación de dos estrategias:
+
+1.  **SMOTE (Synthetic Minority Oversampling Technique):**\
+    Esta técnica permite aumentar la representación de las clases minoritarias mediante la generación de ejemplos sintéticos que interpolan instancias existentes de estas clases. Esto mejora la sensibilidad y el rendimiento en la clasificación de las clases menos representadas, evitando los problemas de sobreajuste asociados con el oversampling tradicional.
+
+2.  **Ajuste de Pesos en SVM:**\
+    Ajustar los pesos de penalización en la SVM permite compensar el desbalance asignando un mayor peso a las clases minoritarias. De esta forma, los errores en estas clases son más penalizados durante el entrenamiento, equilibrando el impacto de la clase mayoritaria en el modelo.
+
+Los resultados actuales muestran que el modelo puede clasificar perfectamente todas las clases bajo las condiciones de este dataset, pero la prevalencia desigual sugiere la necesidad de incorporar estas estrategias para garantizar una mayor robustez en escenarios más variados. Estudios previos han demostrado que la combinación de **SMOTE + Ajuste de Pesos** mejora significativamente métricas clave como precisión balanceada, sensibilidad y F1-score, asegurando un mejor rendimiento en la clasificación de medios de transporte con clases minoritarias relevantes.
 
 ```{r}
 # Crear una malla de puntos en el espacio 2D
@@ -463,10 +585,21 @@ svm_model_2d <- svm(ActivityType ~ accelX.g. + accelY.g., data = train_set_2d, k
 plot(svm_model_2d, train_set_2d, main = "SVM classification plot")
 
 # Agregar una leyenda manualmente
-legend("topright", legend = levels(train_set_2d$ActivityType),
+legend("bottom", legend = levels(train_set_2d$ActivityType),
        col = 1:length(levels(train_set_2d$ActivityType)), pch = 1)
 
 ```
+
+**Observaciones de los graficos:**
+
+-   El modelo ha logrado identificar regiones claras para la mayoría de las clases (`Andando`, `Coche_urbano`, `Avión`). Esto sugiere que las características seleccionadas (`accelX.g.` y `accelY.g.`) son informativas para la clasificación.
+
+-   Hay áreas donde las clases, como `Autobús` y `Bicicleta`, tienen una ligera superposición en el espacio, lo que podría dificultar la clasificación precisa. Esto podría deberse a la similitud en las características dinámicas de estas actividades.
+
+-   Dado que algunas clases tienen una representación mucho menor en los datos, como `Avión` y `Coche_autopista`, es posible que el modelo sea más sensible a errores en estas clases, especialmente en regiones donde las fronteras son menos claras.
+
+-   Este análisis conecta directamente con los resultados de la matriz de confusión y la distribución de clases, destacando la importancia de las características seleccionadas y la necesidad de estrategias adicionales para optimizar el modelo.\
+    \
 
 ```{r}
 # Instalar pROC si no lo tienes
@@ -476,15 +609,72 @@ library(pROC)
 ```
 
 ```{r}
-# Obtener probabilidades predichas para cada clase
-probabilities <- predict(svm_model, test_set, type = "prob")
+# Obtener probabilidades predichas
+predicted_probabilities <- attr(predictions, "probabilities")
 
-# Verificar la estructura de las probabilidades
-str(probabilities)
+# Inicializar gráfico vacío
+plot(1, type = "n", xlim = c(0, 1), ylim = c(0, 1),
+     xlab = "Tasa de Falsos Positivos (1 - Especificidad)",
+     ylab = "Tasa de Verdaderos Positivos (Sensibilidad)",
+     main = "Curvas ROC por Clase")
+abline(a = 0, b = 1, col = "red", lty = 2)  # Línea de referencia
 
+# Iterar sobre las clases
+classes <- colnames(predicted_probabilities)
+for (class in classes) {
+  # Crear etiquetas binarias para la clase actual
+  binary_labels <- ifelse(test_set$ActivityType == class, 1, 0)
+  
+  # Calcular la curva ROC para esta clase
+  roc_curve <- roc(binary_labels, predicted_probabilities[, class])
+  
+  # Agregar la curva al gráfico
+  plot(roc_curve, col = sample(colors(), 1), add = TRUE)
+  
+  # Mostrar el AUC en consola
+  auc_value <- auc(roc_curve)
+  cat("AUC para la clase", class, ":", auc_value, "\n")
+}
+
+# Agregar leyenda al gráfico
+legend("bottomright", legend = classes, col = 1:length(classes), lty = 1)
 ```
 
-**CREAR CURVA ROC PARA CEHQUEAR OVERFITING**
+-   **Correcto técnicamente:** El gráfico muestra curvas ROC perfectamente ajustadas con valores de sensibilidad y especificidad ideales para todas las clases, lo que concuerda con las métricas calculadas.
+
+-   **Irrealista en la práctica:** La situación en la que todas las clases tienen una separación perfecta es extremadamente rara en problemas reales. Este comportamiento puede deberse a:
+
+    -   **Sobreajuste:** El modelo está demasiado ajustado al dataset.
+
+    -   **Datos ideales o sin ruido:** Si los datos tienen características muy bien separadas o hay poca variabilidad, el modelo puede mostrar este comportamiento.
+
+    -   **Filtros en los datos:** Si hay una filtración de datos entre el conjunto de entrenamiento y test (por ejemplo, datos duplicados), esto puede dar resultados engañosamente perfectos.
+
+    ### **Pasos a Seguir**
+
+    1.  **Verificar Overfitting:**
+
+        -   Aplicar validación cruzada para evaluar el rendimiento del modelo en diferentes subconjuntos de datos.
+
+        -   Inspeccionar las métricas en entrenamiento y prueba para verificar si hay una discrepancia significativa.
+
+    2.  **Balancear las Clases:**
+
+        -   Implementar técnicas como **SMOTE** y/o ajustar los pesos de las clases en el modelo para abordar el desbalance.
+
+    3.  **Revisar el Dataset:**
+
+        -   Revisar la calidad y escalado de las variables.
+
+        -   Evaluar el uso de transformaciones adicionales o reducción de dimensionalidad (e.g., PCA).
+
+    4.  **Validación Adicional:**
+
+        -   Auste del parámetro `C` en SVM.
+
+        -   Evaluar las métricas como el **F1-Score** y precisión balanceada para todas las clases.
+
+        -   Inspeccionar errores de clasificación en clases minoritarias.
 
 # 8. Evaluación de la importancia de las variables utilizando RF
 
@@ -525,28 +715,88 @@ barplot(imp_sorted$MeanDecreaseGini,
 
 ```
 
-1.  <div>
+**Selección de Variables para la Clasificación de Medios de Transporte**
 
-    > **Puntos de Mejoras proximate iteracion:**
-    >
-    > 1.  **Chequear el balanceo**
-    >
-    > 2.  **Incluir los dataset restantes**
-    >
-    > 3.  **Incluir la frecuencia de herzios**
-    >
-    > 4.  **Confidence Eliminar**
-    >
-    > 5.  **Chequear en eliminar colinealidad antes de modelar**
-    >
-    > 6.  **Probar modelo con las variables mas importante del RF**
-    >
-    > 7.  **Probar con difrentes kernel: Simoidales Gamma, Radial Gammna Dispersion.**
-    >
-    > 8.  **Cheaquear ROC para el overfitting, se presume por los resultados tan sesgados**
-    >
-    > 9.  **Evaluar aplicar Crossval**
-    >
-    > 10. **SEGUIR ITERANDO**
+El análisis basado en el criterio de **Mean Decrease Gini** permitió identificar las variables más relevantes para el modelo de clasificación. Sin embargo, además de considerar la importancia relativa de cada variable, también se evaluó su relevancia específica en el contexto de la **predicción de medios de transporte**, reconociendo que ciertas características, aunque con menor importancia en el análisis, pueden ser fundamentales para capturar las dinámicas propias de cada tipo de transporte.
 
-    </div>
+### **Variables Seleccionadas**
+
+1.  **Dinámicas de Movimiento (Aceleración y Giroscopios):** Estas variables son esenciales para describir los patrones característicos de movimiento, como aceleración, frenado y giros, que diferencian medios de transporte como coches, bicicletas o aviones:
+
+    -   `accelX.g.`, `accelY.g.`, `accelZ.g.`
+
+    -   `Roll.rads.`, `Pitch.rads.`, `Yaw.rads.`
+
+2.  **Contexto Ambiental:** Estas variables aportan información crítica sobre las condiciones del entorno, como la altitud y la presión, que son especialmente útiles para diferenciar medios terrestres y aéreos:
+
+    -   `Pressure.kilopascals.` (presión atmosférica)
+
+    -   `RelativeAltitude.meters.` (altitud relativa)
+
+3.  **Variables Moderadamente Importantes:** Aunque variables como `m11`, `m12`, `m13`, `m21`, `m22`, y `m33` no están entre las de mayor importancia relativa, complementan la información de orientación y dinámica, contribuyendo al modelo en escenarios más complejos.
+
+### **Variables Excluidas**
+
+Se decidió excluir variables con baja relevancia relativa o redundancia:
+
+-   `accelUserX.g.`, `accelUserY.g.`, `accelUserZ.g.`
+
+-   `gyroX.rad.s.`, `gyroZ.rad.s.`
+
+# 9. Pasos a seguir: 
+
+1.  **Eliminación de Variables no Relevantes:**\
+    Basado en el análisis de importancia relativa con el criterio de **Mean Decrease Gini**, se eliminarán las variables propuestas que aportan baja relevancia al modelo. Esto reducirá la redundancia y permitirá un enfoque más eficiente en las características clave para la clasificación de medios de transporte.
+
+2.  **Aplicación de Técnicas para Abordar el Desbalance de Clases:**\
+    Implementar técnicas como **SMOTE (Synthetic Minority Oversampling Technique)** para aumentar la representación de las clases minoritarias y **ajuste de pesos en el modelo** para penalizar los errores en estas clases. Esto garantizará que el modelo sea más equilibrado y robusto frente al desbalance de clases.
+
+3.  **Entrenamiento del Modelo y Evaluación de Resultados:**\
+    Entrenar nuevamente el modelo con las variables seleccionadas y las técnicas de balanceo aplicadas. Evaluar su desempeño utilizando métricas como sensibilidad, precisión balanceada y F1-score para asegurar mejoras en la clasificación de las clases minoritarias.
+
+4.  **Exploración de Nuevos Métodos de Entrenamiento:**\
+    Probar configuraciones avanzadas, incluyendo:
+
+    -   **Funciones Radiales Gamma:** Para capturar patrones no lineales en los datos.
+
+    -   **Funciones Sigmoidales:** Útiles para manejar relaciones complejas entre características.
+
+5.  **Chequeo de la Curva ROC y Análisis de Overfitting:**\
+    Analizar las curvas ROC para cada clase y revisar posibles indicadores de overfitting, especialmente dado el desempeño aparentemente perfecto en los resultados actuales. Esto ayudará a identificar si el modelo está generalizando correctamente.
+
+6.  **Aplicación de Validación Cruzada:**\
+    Implementar técnicas de validación cruzada para evaluar la estabilidad del modelo en diferentes subconjuntos de datos. Esto permitirá verificar la capacidad del modelo para generalizar y evitar problemas de sobreajuste.
+
+# **Para el Paper**
+
+> El problema del **desbalance de clases** en el aprendizaje supervisado es ampliamente reconocido en la literatura como un factor que afecta negativamente el rendimiento de los modelos de clasificación (He & Garcia, 2009). En particular, **las Máquinas de Soporte Vectorial (SVM)** tienden a sesgarse hacia la clase mayoritaria debido a su objetivo de minimizar el error global, lo que perjudica la clasificación de la clase minoritaria (Fernández et al., 2011).
+>
+> #### **Uso de SMOTE para Mejorar la Representación de la Clase Minoritaria**
+>
+> Para abordar este problema, se han propuesto diversas estrategias, entre las cuales el **Oversampling Sintético** a través de **SMOTE (Synthetic Minority Over-sampling Technique)** se ha consolidado como una de las técnicas más efectivas (Chawla et al., 2002). En lugar de replicar instancias existentes, como ocurre en el oversampling tradicional, **SMOTE genera nuevas instancias sintéticas interpolando puntos en el espacio de características entre ejemplos de la clase minoritaria**, lo que contribuye a mejorar la representatividad del modelo sin introducir redundancia en los datos (Fernández et al., 2018).
+>
+> SMOTE ha sido evaluado en múltiples estudios y se ha demostrado que mejora significativamente la sensibilidad (recall) en modelos de clasificación sin degradar el rendimiento de la clase mayoritaria (Fernández et al., 2013). Esto es particularmente útil en aplicaciones médicas y de detección de fraudes, donde la detección de la clase minoritaria es crucial (López et al., 2012).
+>
+> #### **Ajuste de Pesos en SVM para Compensar el Desbalance**
+>
+> Además del uso de SMOTE, se ha encontrado que **ajustar los pesos de penalización en la SVM** puede mejorar aún más el rendimiento en escenarios desbalanceados. Vapnik (1999) estableció que el **parámetro de costo (`C`)** en las SVM regula la importancia de minimizar los errores de clasificación. Al aplicar **pesos inversamente proporcionales a la frecuencia de cada clase**, se logra compensar el desbalance, asegurando que los errores en la clase minoritaria sean más penalizados durante el proceso de optimización (Akbani et al., 2004).
+>
+> En particular, el trabajo de He y Ma (2013) mostró que el uso combinado de **SMOTE + Ajuste de Pesos en SVM** ofrece una mejora sustancial en términos de **precisión balanceada, sensibilidad y F1-score**, superando métodos convencionales como el undersampling o el simple oversampling.
+
+Referencias:
+
+-   Akbani, R., Kwek, S., & Japkowicz, N. (2004). Applying Support Vector Machines to Imbalanced Datasets. *European Conference on Machine Learning*.
+
+-   Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: Synthetic Minority Over-sampling Technique. *Journal of Artificial Intelligence Research, 16*, 321-357.
+
+-   Fernández, A., García, S., & Herrera, F. (2011). Addressing the Classification with Imbalanced Data: Open Problems and New Challenges. *Lecture Notes in Artificial Intelligence, 6678*, 1–10.
+
+-   Fernández, A., et al. (2013). Learning from Imbalanced Data: Open Challenges and Future Directions. *Progress in Artificial Intelligence, 1*(1), 1-12.
+
+-   He, H., & Garcia, E. A. (2009). Learning from imbalanced data. *IEEE Transactions on Knowledge and Data Engineering, 21*(9), 1263-1284.
+
+-   He, H., & Ma, Y. (2013). Imbalanced Learning: Foundations, Algorithms, and Applications. *Wiley-IEEE Press*.
+
+-   López, V., Fernández, A., Galar, M., & Herrera, F. (2012). Analysis of preprocessing vs. cost-sensitive learning for imbalanced classification. *Expert Systems with Applications, 39*(7), 6585-6608.
+
+-   Vapnik, V. N. (1999). The Nature of Statistical Learning Theory. *Springer-Verlag*.
