@@ -37,11 +37,13 @@ Para lograr esto, se cuenta con un conjunto de datos que incluye:
 
 ### Objetivo Notebook:
 
+El objetivo de este notebook es realizar una preselección de variables clave para la construcción de un modelo basado en Máquinas de Vectores de Soporte (SVM) que permita predecir el modo de transporte a partir de datos de sensores de dispositivos móviles.
+
 # **1. Carga de librerías**
 
 ```{r}
 # Lista de paquetes necesarios
-necessary_packages <- c("dplyr", "caret", "e1071", "robustbase", "ggplot2", "data.table")
+necessary_packages <- c("dplyr", "caret", "e1071", "robustbase", "ggplot2", "data.table", "pROC","doParallel" )
 
 # Instalar paquetes que no están instalados
 new_packages <- necessary_packages[!(necessary_packages %in% installed.packages()[, "Package"])]
@@ -276,6 +278,64 @@ if (exists("data")) {
 >
 > Para mejorar la precisión y estabilidad del modelo, sería recomendable eliminar estas variables colineales, como `qX`, `qY` y `gyroX.rad.s.`, así como las variables magnéticas. De esta forma, reducimos la redundancia, lo que permitirá que el modelo funcione de manera más eficiente y que los resultados sean más fáciles de interpretar.
 
+### ANOVA tras el análisis de colinealidad (VIF)
+
+l análisis de **Factor de Inflación de Varianza (VIF)** reveló la presencia de **alta colinealidad** entre varias variables, lo que indica redundancia y posible inestabilidad en el modelo. Para abordar esto, se aplica **ANOVA** con el fin de:
+
+✅ **Seleccionar solo las variables con diferencias significativas entre las clases de `ActivityType`**\
+✅ **Eliminar variables con VIF alto que no aporten información relevante**\
+✅ **Reducir la redundancia y mejorar la capacidad de generalización del modelo**
+
+Se consideran significativas las variables con **p \< 0.05**, asegurando que solo aquellas que realmente influyen en la clasificación sean retenidas. Esto optimiza el modelo, evitando sobreajuste y mejorando la interpretación de los resultados.
+
+```{r}
+library(dplyr)
+library(purrr)
+
+num_vars <- names(data)[sapply(data, is.numeric)]
+num_vars <- setdiff(num_vars, "ActivityType")
+
+
+# Calcular ANOVA para todas las variables numéricas
+anova_results <- map_dbl(num_vars, ~anova(lm(data[[.x]] ~ data$ActivityType))$`Pr(>F)`[1])
+
+# Crear un dataframe con los resultados
+anova_df <- data.frame(Variable = num_vars, P_Value = anova_results)
+
+# Filtrar variables con p < 0.05 (significativas)
+variables_significativas <- anova_df %>% filter(P_Value < 0.05) %>% arrange(P_Value)
+
+# Mostrar las variables significativas
+print(variables_significativas)
+
+```
+
+```{r}
+library(ggplot2)
+
+# Crear una nueva columna indicando si la variable es significativa
+anova_df <- anova_df %>%
+  mutate(Significativa = ifelse(P_Value < 0.05, "Significativa (p < 0.05)", "No significativa (p >= 0.05)"))
+
+# Crear gráfico de barras
+ggplot(anova_df, aes(x = reorder(Variable, -P_Value), y = -log10(P_Value), fill = Significativa)) +
+  geom_bar(stat = "identity", position = "identity") +
+  scale_fill_manual(values = c("Significativa (p < 0.05)" = "steelblue", "No significativa (p >= 0.05)" = "red")) +
+  labs(title = "Resultados de ANOVA - Variables Significativas vs No Significativas",
+       x = "Variables", y = "-log10(p-value)",
+       fill = "Significancia") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "gray")  # Línea de referencia en p = 0.05
+
+```
+
+Para definir las variables más relevantes en la predicción del tipo de transporte, se han utilizado los siguientes enfoques:
+
+✅ **1. ANOVA (Análisis de Varianza):** Se identificaron las variables con **p-valores menores a 0.05**, lo que indica que presentan diferencias significativas entre las clases de `ActivityType`.\
+✅ **2. VIF (Factor de Inflación de la Varianza):** Se analizaron las variables con **VIF \> 10** para identificar posibles redundancias.\
+✅ **3. Validación con Importancia en Random Forest (RF):** Se propone validar las variables seleccionadas a través del criterio `MeanDecreaseGini`, que permite medir la contribución real de cada variable en la clasificación.
+
 ## **3.4** Distribución de las Clases en `ActivityType`
 
 ```{r}
@@ -307,15 +367,14 @@ La imputación mediante **winsorización** es un enfoque útil para tratar los o
 ```{r}
 # Función para aplicar winsorización
 winsorize <- function(x) {
-  q1 <- quantile(x, 0.01)  # Percentil 1
-  q99 <- quantile(x, 0.99)  # Percentil 99
+  q1 <- quantile(x, 0.05)  # Percentil 1
+  q99 <- quantile(x, 0.95)  # Percentil 99
   pmax(pmin(x, q99), q1)  # Limitar valores fuera de estos percentiles
 }
 
 # Lista de columnas a winsorizar
-columns_to_winsorize <- c("gyroZ.rad.s.", "Roll.rads.", "m13", "gyroX.rad.s.", "gyroY.rad.s.", 
-                          "accelX.g.", "m32", "qX", "magZ.µT.", "qY", "accelUserX.g.", 
-                          "accelUserZ.g.", "accelZ.g.", "magY.µT.", "m33", "accelUserY.g.")
+columns_to_winsorize <- c("gyroZ.rad.s.", "Roll.rads.", "m13", "gyroX.rad.s.", "gyroY.rad.s.",  "accelX.g.", "m32", "qX", "magZ.µT.", "qY", "accelUserX.g.", 
+ "accelUserZ.g.", "accelZ.g.", "magY.µT.", "m33", "accelUserY.g.")
 
 # Aplicar winsorización solo a las columnas que existen en el dataset
 columns_to_winsorize <- columns_to_winsorize[columns_to_winsorize %in% colnames(data)]
@@ -356,42 +415,43 @@ if (ncol(num_data) > 0) {
 }
 ```
 
-```{r}
-if (ncol(num_data) > 0) {
-  # Transformar datos a formato largo
-  num_data_long <- num_data %>%
-    pivot_longer(cols = everything(), names_to = "Variable", values_to = "Valor")
-  
-  # Dividir las variables en grupos de 6
-  variable_groups <- split(unique(num_data_long$Variable), ceiling(seq_along(unique(num_data_long$Variable)) / 6))
+Como se puede observar, la **winsorización no produjo cambios significativos en los valores extremos**, lo que indica que los outliers siguen presentes en los datos. Dado que estos valores pueden afectar el rendimiento del modelo y la estabilidad del entrenamiento, se opta por una estrategia de **imputación basada en la media**. Este método permite suavizar el impacto de los valores atípicos sin eliminar información clave, asegurando que las variables con distribuciones sesgadas no introduzcan ruido excesivo en la clasificación del tipo de transporte.
 
-  for (group in variable_groups) {
-    # Filtrar las variables del grupo actual
-    group_data_long <- num_data_long %>% filter(Variable %in% group)
-    
-    # Crear los boxplots
-    print(
-      ggplot(group_data_long, aes(x = Variable, y = Valor)) +
-        geom_boxplot(outlier.colour = "red", outlier.size = 1.5, fill = "lightblue") +
-        theme_minimal() +
-        labs(
-          title = "Visualización de Outliers",
-          x = "Variable",
-          y = "Valores"
-        ) +
-        theme(
-          plot.title = element_text(size = 8, hjust = 0.5),
-          axis.text.x = element_text(angle = 0, hjust = 1)
-        ) +
-        facet_wrap(~ Variable, scales = "free", ncol = 3)  # Cambia "ncol" a 2 o 3 según el diseño que prefieras
-    )
-  }
-} else {
-  cat("No hay variables numéricas en el dataset.\n")
+```{r}
+# Lista de columnas a winsorizar (imputar outliers con la mediana)
+columns_to_winsorize <- c("gyroZ.rad.s.", "Roll.rads.", "m13", "gyroX.rad.s.", "gyroY.rad.s.",  
+                          "accelX.g.", "m32", "qX", "magZ.µT.", "qY", "accelUserX.g.", 
+                          "accelUserZ.g.", "accelZ.g.", "magY.µT.", "m33", "accelUserY.g.")
+
+
+# Filtrar solo las columnas que realmente existen en `data`
+columns_to_winsorize <- columns_to_winsorize[columns_to_winsorize %in% names(data)]
+print(columns_to_winsorize)  # Verifica qué columnas quedan después del filtro
+
+# Función para reemplazar outliers por la mediana
+replace_outliers <- function(x) {
+  q1 <- quantile(x, 0.25, na.rm = TRUE)
+  q3 <- quantile(x, 0.75, na.rm = TRUE)
+  iqr <- q3 - q1
+  
+  lower_bound <- q1 - 1.5 * iqr
+  upper_bound <- q3 + 1.5 * iqr
+  
+  x[x < lower_bound | x > upper_bound] <- median(x, na.rm = TRUE)
+  return(x)
 }
+
+# Aplicar la imputación solo a las variables que existen en `data`
+data_imputed <- data %>%
+  mutate(across(all_of(columns_to_winsorize), replace_outliers))
+
+# Verificar que los valores extremos fueron reemplazados
+summary(data_imputed)
+
+
 ```
 
-## 4.2 Eliminacion de Vairables 
+## 4.2 Eliminacion de Vairables
 
 Las variables `qX`, `qY` y `qZ` serán eliminadas debido a su alta correlación con las **matrices de rotación**. Estas variables aportan información redundante al modelo y, para evitar problemas de multicolinealidad, se ha decidido priorizar las **matrices de rotación**, que ya encapsulan la información necesaria para describir la orientación del objeto en movimiento.
 
@@ -420,49 +480,29 @@ cat("El dataset ha sido guardado en el directorio de trabajo actual:", getwd())
 
 # 5. Escalado de Datos
 
-Para los **outliers**, aplicamos **RobustScaler**, y para las otras variables, utilizamos **Min-Max Scaling.**
+Utilizamos **Min-Max Scaling, porque trabaja mejor con SVM**
 
 ```{r}
 # Convertir las variables categóricas a factor
 data$ActivityType <- factor(data$ActivityType)
+```
 
-# Identificar las variables con outliers
-variables_with_outliers <- c("gyroZ.rad.s.", "Roll.rads.", "m13", "gyroX.rad.s.",                              "gyroY.rad.s.", "accelX.g.", "m32", "accelUserX.g.", 
-                            "accelUserZ.g.", "accelZ.g.", "m33", "accelUserY.g.")
+```{r}
+# Lista de columnas numéricas
+num_columns <- sapply(data, is.numeric)
 
-# Función para aplicar RobustScaler
-robust_scaler <- function(x) {
-  median_val <- median(x, na.rm = TRUE)
-  mad_val <- mad(x, na.rm = TRUE)
-  (x - median_val) / mad_val
-}
+# Aplicar Min-Max Scaling a todas las columnas numéricas
+data[num_columns] <- lapply(data[num_columns], function(x) {
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+})
 
-# Aplicar RobustScaler a las variables con outliers
-data[variables_with_outliers] <- lapply(data[variables_with_outliers], robust_scaler)
+# Verificar el rango después del escalado
+summary(data[num_columns])
 
-# Escalado Min-Max para las otras variables (sin outliers)
-# Filtrar solo las columnas numéricas (eliminar las categóricas)
-num_variables <- sapply(data, is.numeric)
-variables_without_outliers <- names(data)[num_variables & !names(data) %in% variables_with_outliers]
-
-# Aplicar Min-Max Scaling a las variables numéricas sin outliers
-data[variables_without_outliers] <- lapply(data[variables_without_outliers], rescale)
-
-# Verificar las primeras filas después de la transformación
-head(data)
 ```
 
 ```{r}
 summary(data)
-```
-
-```{r}
-# Verificar el rango de las variables con Min-Max Scaling
-sapply(data[variables_without_outliers], function(x) range(x, na.rm = TRUE))
-
-# Verificar las estadísticas básicas de las variables con RobustScaler
-sapply(data[variables_with_outliers], summary)
-
 ```
 
 # 6. Dividir los datos en entrenamiento y test
@@ -471,7 +511,7 @@ sapply(data[variables_with_outliers], summary)
 set.seed(123)
 
 # Crear la partición (estratificación)
-split <- createDataPartition(data$ActivityType, p = 0.8, list = FALSE)  # 80% entrenamiento, 20% test
+split <- createDataPartition(data$ActivityType, p = 0.80, list = FALSE)  # 80% entrenamiento, 20% test
 train_set <- data[split, ]
 test_set <- data[-split, ]
 ```
@@ -603,7 +643,6 @@ legend("bottom", legend = levels(train_set_2d$ActivityType),
 
 ```{r}
 # Instalar pROC si no lo tienes
-install.packages("pROC")
 library(pROC)
 
 ```
@@ -664,7 +703,7 @@ legend("bottomright", legend = classes, col = 1:length(classes), lty = 1)
 
     3.  **Revisar el Dataset:**
 
-        -   Revisar la calidad y escalado de las variables.
+        -   Revisar la calidad, correlaci{ones con la variable target y escalado de las variables.
 
         -   Evaluar el uso de transformaciones adicionales o reducción de dimensionalidad (e.g., PCA).
 
@@ -715,41 +754,65 @@ barplot(imp_sorted$MeanDecreaseGini,
 
 ```
 
-**Selección de Variables para la Clasificación de Medios de Transporte**
+## **📊 Variables Seleccionadas**
 
-El análisis basado en el criterio de **Mean Decrease Gini** permitió identificar las variables más relevantes para el modelo de clasificación. Sin embargo, además de considerar la importancia relativa de cada variable, también se evaluó su relevancia específica en el contexto de la **predicción de medios de transporte**, reconociendo que ciertas características, aunque con menor importancia en el análisis, pueden ser fundamentales para capturar las dinámicas propias de cada tipo de transporte.
+### **1️⃣ Dinámicas de Movimiento (Aceleración y Giroscopios)**
 
-### **Variables Seleccionadas**
+Estas variables son esenciales para **describir patrones característicos de movimiento**, como **aceleración, frenado y giros**, diferenciando entre tipos de transporte como automóviles, bicicletas o aviones.
 
-1.  **Dinámicas de Movimiento (Aceleración y Giroscopios):** Estas variables son esenciales para describir los patrones característicos de movimiento, como aceleración, frenado y giros, que diferencian medios de transporte como coches, bicicletas o aviones:
+-   ✅ **Aceleración:** `accelX.g.`, `accelZ.g., accelUserX.g.`, `accelUserY.g.`, `accelUserZ.g.`
 
-    -   `accelX.g.`, `accelY.g.`, `accelZ.g.`
+-   ✅ **Giroscopios (Rotaciones):** `Roll.rads.`, `Pitch.rads.`, `Yaw.rads.`
 
-    -   `Roll.rads.`, `Pitch.rads.`, `Yaw.rads.`
+📌 **Motivo de la selección:**\
+Las aceleraciones y rotaciones son **fundamentales** para identificar la dinámica del transporte, ya que diferentes medios de transporte presentan patrones específicos en estas variables.
 
-2.  **Contexto Ambiental:** Estas variables aportan información crítica sobre las condiciones del entorno, como la altitud y la presión, que son especialmente útiles para diferenciar medios terrestres y aéreos:
+### **2️⃣ Contexto Ambiental**
 
-    -   `Pressure.kilopascals.` (presión atmosférica)
+Estas variables aportan información **sobre las condiciones del entorno**, diferenciando **medios terrestres y aéreos**.
 
-    -   `RelativeAltitude.meters.` (altitud relativa)
+-   ✅ **Presión atmosférica:** `Pressure.kilopascals.`
 
-3.  **Variables Moderadamente Importantes:** Aunque variables como `m11`, `m12`, `m13`, `m21`, `m22`, y `m33` no están entre las de mayor importancia relativa, complementan la información de orientación y dinámica, contribuyendo al modelo en escenarios más complejos.
+-   ✅ **Altitud relativa:** `RelativeAltitude.meters.`
 
-### **Variables Excluidas**
+📌 **Motivo de la selección:**\
+La presión y altitud **permiten diferenciar transporte terrestre y aéreo**, proporcionando información crítica sobre la ubicación y altitud del movimiento.
 
-Se decidió excluir variables con baja relevancia relativa o redundancia:
+### **3️⃣ Componentes de Movimiento**
 
--   `accelUserX.g.`, `accelUserY.g.`, `accelUserZ.g.`
+Estas variables describen **transformaciones dinámicas en la trayectoria**, complementando la información de aceleración y rotación.
 
--   `gyroX.rad.s.`, `gyroZ.rad.s.`
+-   ✅ `m12`, `m13`, `m22`, `m33`
 
-# 9. Pasos a seguir: 
+📌 **Motivo de la selección:**\
+Aunque no están entre las más importantes individualmente, **mejoran la precisión en la identificación del tipo de transporte**, especialmente en escenarios más complejos.
+
+## **📌 Variables Excluidas**
+
+Se decidió excluir variables con **baja relevancia relativa** o **redundancia**:
+
+-   ❌ **Aceleración del usuario:** `accelUserY.g.` (redundantes con `accelX.g.` y `accelZ.g.`).
+
+-   ❌ **Giroscopios con menor relevancia:** `gyroX.rad.s.`, `gyroZ.rad.s.` (menor importancia en `MeanDecreaseGini`).
+
+-   ❌ **Variables de orientación `q` eliminadas:** `qX`, `qY`, `qZ`, `qW` (baja importancia en RF y redundancia en orientación).
+
+### **📊 Variables Seleccionadas y Justificación**
+
+Las siguientes variables han sido retenidas porque:\
+✔ **Tienen alta importancia en Random Forest (`MeanDecreaseGini`).**\
+✔ **Son significativas en ANOVA (p \< 0.05).**\
+✔ **No presentan colinealidad extrema según VIF.**
+
+![](images/clipboard-2531371232.png)
+
+# 9. Pasos a seguir:
 
 1.  **Eliminación de Variables no Relevantes:**\
-    Basado en el análisis de importancia relativa con el criterio de **Mean Decrease Gini**, se eliminarán las variables propuestas que aportan baja relevancia al modelo. Esto reducirá la redundancia y permitirá un enfoque más eficiente en las características clave para la clasificación de medios de transporte.
+    Basado en **ANOVA, VIF y `MeanDecreaseGini` en RF**. Se mantienen solo variables clave en **movimiento, aceleración y contexto ambiental**.
 
 2.  **Aplicación de Técnicas para Abordar el Desbalance de Clases:**\
-    Implementar técnicas como **SMOTE (Synthetic Minority Oversampling Technique)** para aumentar la representación de las clases minoritarias y **ajuste de pesos en el modelo** para penalizar los errores en estas clases. Esto garantizará que el modelo sea más equilibrado y robusto frente al desbalance de clases.
+    Implementar técnicas como **SMOTE (Synthetic Minority Oversampling Technique)** para aumentar la representación de las clases minoritarias y **Ajuste de pesos (`class.weights`)** en SVM para penalizar errores en clases menos representadas.
 
 3.  **Entrenamiento del Modelo y Evaluación de Resultados:**\
     Entrenar nuevamente el modelo con las variables seleccionadas y las técnicas de balanceo aplicadas. Evaluar su desempeño utilizando métricas como sensibilidad, precisión balanceada y F1-score para asegurar mejoras en la clasificación de las clases minoritarias.
@@ -761,42 +824,10 @@ Se decidió excluir variables con baja relevancia relativa o redundancia:
 
     -   **Funciones Sigmoidales:** Útiles para manejar relaciones complejas entre características.
 
-5.  **Chequeo de la Curva ROC y Análisis de Overfitting:**\
+5.  **Evaluación de curvas ROC, matriz de confusión y F1-score para medir mejoras.**\
     Analizar las curvas ROC para cada clase y revisar posibles indicadores de overfitting, especialmente dado el desempeño aparentemente perfecto en los resultados actuales. Esto ayudará a identificar si el modelo está generalizando correctamente.
 
 6.  **Aplicación de Validación Cruzada:**\
     Implementar técnicas de validación cruzada para evaluar la estabilidad del modelo en diferentes subconjuntos de datos. Esto permitirá verificar la capacidad del modelo para generalizar y evitar problemas de sobreajuste.
 
-# **Para el Paper**
-
-> El problema del **desbalance de clases** en el aprendizaje supervisado es ampliamente reconocido en la literatura como un factor que afecta negativamente el rendimiento de los modelos de clasificación (He & Garcia, 2009). En particular, **las Máquinas de Soporte Vectorial (SVM)** tienden a sesgarse hacia la clase mayoritaria debido a su objetivo de minimizar el error global, lo que perjudica la clasificación de la clase minoritaria (Fernández et al., 2011).
->
-> #### **Uso de SMOTE para Mejorar la Representación de la Clase Minoritaria**
->
-> Para abordar este problema, se han propuesto diversas estrategias, entre las cuales el **Oversampling Sintético** a través de **SMOTE (Synthetic Minority Over-sampling Technique)** se ha consolidado como una de las técnicas más efectivas (Chawla et al., 2002). En lugar de replicar instancias existentes, como ocurre en el oversampling tradicional, **SMOTE genera nuevas instancias sintéticas interpolando puntos en el espacio de características entre ejemplos de la clase minoritaria**, lo que contribuye a mejorar la representatividad del modelo sin introducir redundancia en los datos (Fernández et al., 2018).
->
-> SMOTE ha sido evaluado en múltiples estudios y se ha demostrado que mejora significativamente la sensibilidad (recall) en modelos de clasificación sin degradar el rendimiento de la clase mayoritaria (Fernández et al., 2013). Esto es particularmente útil en aplicaciones médicas y de detección de fraudes, donde la detección de la clase minoritaria es crucial (López et al., 2012).
->
-> #### **Ajuste de Pesos en SVM para Compensar el Desbalance**
->
-> Además del uso de SMOTE, se ha encontrado que **ajustar los pesos de penalización en la SVM** puede mejorar aún más el rendimiento en escenarios desbalanceados. Vapnik (1999) estableció que el **parámetro de costo (`C`)** en las SVM regula la importancia de minimizar los errores de clasificación. Al aplicar **pesos inversamente proporcionales a la frecuencia de cada clase**, se logra compensar el desbalance, asegurando que los errores en la clase minoritaria sean más penalizados durante el proceso de optimización (Akbani et al., 2004).
->
-> En particular, el trabajo de He y Ma (2013) mostró que el uso combinado de **SMOTE + Ajuste de Pesos en SVM** ofrece una mejora sustancial en términos de **precisión balanceada, sensibilidad y F1-score**, superando métodos convencionales como el undersampling o el simple oversampling.
-
-Referencias:
-
--   Akbani, R., Kwek, S., & Japkowicz, N. (2004). Applying Support Vector Machines to Imbalanced Datasets. *European Conference on Machine Learning*.
-
--   Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: Synthetic Minority Over-sampling Technique. *Journal of Artificial Intelligence Research, 16*, 321-357.
-
--   Fernández, A., García, S., & Herrera, F. (2011). Addressing the Classification with Imbalanced Data: Open Problems and New Challenges. *Lecture Notes in Artificial Intelligence, 6678*, 1–10.
-
--   Fernández, A., et al. (2013). Learning from Imbalanced Data: Open Challenges and Future Directions. *Progress in Artificial Intelligence, 1*(1), 1-12.
-
--   He, H., & Garcia, E. A. (2009). Learning from imbalanced data. *IEEE Transactions on Knowledge and Data Engineering, 21*(9), 1263-1284.
-
--   He, H., & Ma, Y. (2013). Imbalanced Learning: Foundations, Algorithms, and Applications. *Wiley-IEEE Press*.
-
--   López, V., Fernández, A., Galar, M., & Herrera, F. (2012). Analysis of preprocessing vs. cost-sensitive learning for imbalanced classification. *Expert Systems with Applications, 39*(7), 6585-6608.
-
--   Vapnik, V. N. (1999). The Nature of Statistical Learning Theory. *Springer-Verlag*.
+# 
