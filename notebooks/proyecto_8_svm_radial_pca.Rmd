@@ -584,32 +584,6 @@ plot(svm_tune)
 ```
 
 ```{r}
-library(viridis)
-
-# 9 **Heatmap de Accuracy en función de C y Sigma para SVM Radial**
-# Ordenar resultados por accuracy
-tune_results_radial <- svm_tune$results %>% 
-  select(C, sigma, Accuracy) %>% 
-  arrange(desc(Accuracy))
-
-# Crear Heatmap con colores equilibrados y etiquetas adaptadas al fondo
-ggplot(tune_results_radial, aes(x = factor(sigma), y = factor(C), fill = Accuracy)) +
-  geom_tile() +
-  scale_fill_viridis_c(option = "cividis", direction = -1, name = "Accuracy") +  
-  geom_text(aes(label = round(Accuracy, 4), 
-                color = ifelse(Accuracy > 0.7, "black", "white")), 
-            size = 5, fontface = "bold") +  # Tamaño más grande para mayor visibilidad
-  scale_color_manual(values = c("white", "black"), guide = "none") +  
-  labs(title = "Accuracy en función de C y Sigma (SVM Radial)",
-       x = "Sigma",
-       y = "C") +
-  theme_minimal(base_size = 14) +
-  theme(panel.grid.major = element_blank(), 
-        panel.grid.minor = element_blank(),
-        axis.text.x = element_text(angle = 45, hjust = 1))
-```
-
-```{r}
 # Capturar el tiempo de inicio del entrenamiento
 start_train_time <- Sys.time()
 
