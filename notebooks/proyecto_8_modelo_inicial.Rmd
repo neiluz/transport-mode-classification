@@ -93,7 +93,14 @@ str(data) # Estructura del dataset
 summary(data) # Resumen estadístico básico
 ```
 
-## 2.1 Adecuacion del dataset
+## 2.1 Adecuación del dataset
+
+```{r}
+# Usando la función table()
+actividad_count <- table(data$ActivityType)
+print(actividad_count)
+
+```
 
 ```{r}
 # Eliminar la columna "ActivityConfidence"
@@ -111,10 +118,6 @@ data$herzios <- ifelse(data$ActivityType == "Avion", 10,
 ```
 
 ```{r}
-data
-```
-
-```{r}
 data %>%
   count(ActivityType, sort = TRUE)
 
@@ -124,6 +127,9 @@ data <- data %>%
 
 data <- data %>%
   mutate(ActivityType = str_replace(ActivityType, "Coche Urbano 250|Coche Urbano 100", "Coche_urbano"))
+
+data <- data %>%
+  mutate(ActivityType = str_replace(ActivityType, "Bicleta", "Bicicleta"))
 
 # Verificar los primeros valores de ActivityType después del reemplazo
 head(data$ActivityType)
@@ -185,12 +191,16 @@ if (ncol(num_data) > 0) {
   
   # Reordenar las columnas
   outlier_detection <- outlier_detection %>%
-    select(Variable, `Outliers (%)` = V1) %>%
-    arrange(desc(`Outliers (%)`))  # Ordenar de mayor a menor
-  
+    select(Variable, `V1`) %>%  # Mantiene "V1" como nombre original
+    arrange(desc(`V1`))  # Ordenar de mayor a menor
+
   # Mostrar la tabla
   print(outlier_detection)
+
+} else {
+  cat("No hay columnas numéricas en el dataset.\n")
 }
+
 ```
 
 **Visualización de Outliers**
@@ -232,7 +242,57 @@ if (ncol(num_data) > 0) {
 }
 ```
 
-## **3.3 Analisisis de Colinealidad**
+## **3.3** Analisisis de Influencias
+
+## 3.3.1. **Correlacion en el conjunto de datos**
+
+```{r}
+library(knitr)      # Para formatear tablas
+library(kableExtra) # Para mejorar la presentación
+
+
+# Calcular la matriz de correlación
+cor_matrix <- cor(num_data, use = "complete.obs")
+
+# Redondear para mejor visualización
+cor_matrix_rounded <- round(cor_matrix, 2)
+
+# Imprimir la matriz de correlación en la consola
+print(cor_matrix_rounded)
+
+# Alternativamente, generar una tabla con kable si prefieres una salida más ordenada
+
+kable(cor_matrix_rounded, caption = "Tabla de Correlaciones (Excluyendo Variables No Relevantes)")
+```
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Convertir la matriz en formato largo
+corr_melted <- melt(cor_matrix)
+
+# Crear el heatmap
+ggplot(corr_melted, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "steelblue", high = "darkred", mid = "white", midpoint = 0, name = "Correlación") +
+  theme_minimal(base_size = 6) +  # Aumentar el tamaño del texto
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12)
+  ) +
+  labs(
+    title = "Mapa de Calor de Correlaciones",
+    x = "Variables",
+    y = "Variables"
+  ) +
+  coord_fixed()
+```
+
+## **3.3.2 Colinealidad**
 
 ```{r}
 library(dplyr)
@@ -278,7 +338,7 @@ if (exists("data")) {
 >
 > Para mejorar la precisión y estabilidad del modelo, sería recomendable eliminar estas variables colineales, como `qX`, `qY` y `gyroX.rad.s.`, así como las variables magnéticas. De esta forma, reducimos la redundancia, lo que permitirá que el modelo funcione de manera más eficiente y que los resultados sean más fáciles de interpretar.
 
-### ANOVA tras el análisis de colinealidad (VIF)
+### 3.3.3. ANOVA
 
 l análisis de **Factor de Inflación de Varianza (VIF)** reveló la presencia de **alta colinealidad** entre varias variables, lo que indica redundancia y posible inestabilidad en el modelo. Para abordar esto, se aplica **ANOVA** con el fin de:
 
@@ -360,98 +420,7 @@ ggplot(data, aes(x = ActivityType)) +
 
 # 4. Imputacion de Variables
 
-## 4.1 Imputacion de Outliers
-
-La imputación mediante **winsorización** es un enfoque útil para tratar los outliers extremos en los datos. En este caso, se ha aplicado winsorización a las variables con más del 10% de outliers, como `gyroZ.rad.s.`, `Roll.rads.`, `gyroX.rad.s.`, entre otras. Este proceso consiste en limitar los valores de las variables fuera de un rango específico, utilizando los percentiles 1 y 99. De esta manera, los valores extremos son reemplazados por los valores más cercanos en esos percentiles, lo que reduce el impacto de los outliers sin eliminar completamente los datos.
-
-```{r}
-# Función para aplicar winsorización
-winsorize <- function(x) {
-  q1 <- quantile(x, 0.05)  # Percentil 1
-  q99 <- quantile(x, 0.95)  # Percentil 99
-  pmax(pmin(x, q99), q1)  # Limitar valores fuera de estos percentiles
-}
-
-# Lista de columnas a winsorizar
-columns_to_winsorize <- c("gyroZ.rad.s.", "Roll.rads.", "m13", "gyroX.rad.s.", "gyroY.rad.s.",  "accelX.g.", "m32", "qX", "magZ.µT.", "qY", "accelUserX.g.", 
- "accelUserZ.g.", "accelZ.g.", "magY.µT.", "m33", "accelUserY.g.")
-
-# Aplicar winsorización solo a las columnas que existen en el dataset
-columns_to_winsorize <- columns_to_winsorize[columns_to_winsorize %in% colnames(data)]
-
-# Aplicar la función de winsorización a las columnas seleccionadas
-data[columns_to_winsorize] <- lapply(data[columns_to_winsorize], winsorize)
-
-# Verificar las primeras filas después de aplicar winsorización
-head(data)
-
-```
-
-```{r}
-if (ncol(num_data) > 0) {
-  cat("### Análisis de Outliers\n")
-  
-  # Cálculo de outliers por IQR
-  outlier_detection <- num_data %>%
-    summarise(across(everything(), ~ {
-      q1 <- quantile(.x, 0.25, na.rm = TRUE)
-      q3 <- quantile(.x, 0.75, na.rm = TRUE)
-      iqr <- q3 - q1
-      sum(.x < (q1 - 1.5 * iqr) | .x > (q3 + 1.5 * iqr), na.rm = TRUE) / length(.x) * 100
-    }))
-  
-  # Transponer la tabla
-  outlier_detection <- as.data.frame(t(outlier_detection))
-  outlier_detection$Variable <- rownames(outlier_detection)
-  rownames(outlier_detection) <- NULL
-  
-  # Reordenar las columnas
-  outlier_detection <- outlier_detection %>%
-    select(Variable, `Outliers (%)` = V1) %>%
-    arrange(desc(`Outliers (%)`))  # Ordenar de mayor a menor
-  
-  # Mostrar la tabla
-  print(outlier_detection)
-}
-```
-
-Como se puede observar, la **winsorización no produjo cambios significativos en los valores extremos**, lo que indica que los outliers siguen presentes en los datos. Dado que estos valores pueden afectar el rendimiento del modelo y la estabilidad del entrenamiento, se opta por una estrategia de **imputación basada en la media**. Este método permite suavizar el impacto de los valores atípicos sin eliminar información clave, asegurando que las variables con distribuciones sesgadas no introduzcan ruido excesivo en la clasificación del tipo de transporte.
-
-```{r}
-# Lista de columnas a winsorizar (imputar outliers con la mediana)
-columns_to_winsorize <- c("gyroZ.rad.s.", "Roll.rads.", "m13", "gyroX.rad.s.", "gyroY.rad.s.",  
-                          "accelX.g.", "m32", "qX", "magZ.µT.", "qY", "accelUserX.g.", 
-                          "accelUserZ.g.", "accelZ.g.", "magY.µT.", "m33", "accelUserY.g.")
-
-
-# Filtrar solo las columnas que realmente existen en `data`
-columns_to_winsorize <- columns_to_winsorize[columns_to_winsorize %in% names(data)]
-print(columns_to_winsorize)  # Verifica qué columnas quedan después del filtro
-
-# Función para reemplazar outliers por la mediana
-replace_outliers <- function(x) {
-  q1 <- quantile(x, 0.25, na.rm = TRUE)
-  q3 <- quantile(x, 0.75, na.rm = TRUE)
-  iqr <- q3 - q1
-  
-  lower_bound <- q1 - 1.5 * iqr
-  upper_bound <- q3 + 1.5 * iqr
-  
-  x[x < lower_bound | x > upper_bound] <- median(x, na.rm = TRUE)
-  return(x)
-}
-
-# Aplicar la imputación solo a las variables que existen en `data`
-data_imputed <- data %>%
-  mutate(across(all_of(columns_to_winsorize), replace_outliers))
-
-# Verificar que los valores extremos fueron reemplazados
-summary(data_imputed)
-
-
-```
-
-## 4.2 Eliminacion de Vairables
+## 4.1 Eliminacion de Variables
 
 Las variables `qX`, `qY` y `qZ` serán eliminadas debido a su alta correlación con las **matrices de rotación**. Estas variables aportan información redundante al modelo y, para evitar problemas de multicolinealidad, se ha decidido priorizar las **matrices de rotación**, que ya encapsulan la información necesaria para describir la orientación del objeto en movimiento.
 
@@ -469,9 +438,106 @@ data <- data[, !(colnames(data) %in% columns_to_remove)]
 head(data)
 ```
 
+## 4.2 Imputacion de Outliers
+
+La imputación mediante **winsorización** es un enfoque útil para tratar los outliers extremos en los datos. En este caso, se ha aplicado winsorización a las variables con más del 10% de outliers, como `gyroZ.rad.s.`, `Roll.rads.`, `gyroX.rad.s.`, entre otras. Este proceso consiste en limitar los valores de las variables fuera de un rango específico, utilizando los percentiles 1 y 99. De esta manera, los valores extremos son reemplazados por los valores más cercanos en esos percentiles, lo que reduce el impacto de los outliers sin eliminar completamente los datos.
+
+```{r}
+# Función para calcular outliers por IQR por cada grupo de ActivityType
+calculate_outliers_by_activity <- function(df, group_col = "ActivityType") {
+  df %>%
+    group_by(!!sym(group_col)) %>%
+    summarise(across(where(is.numeric), ~ {
+      q1 <- quantile(.x, 0.25, na.rm = TRUE)
+      q3 <- quantile(.x, 0.75, na.rm = TRUE)
+      iqr <- q3 - q1
+      outliers <- sum(.x < (q1 - 1.5 * iqr) | .x > (q3 + 1.5 * iqr), na.rm = TRUE)
+      return(outliers / length(.x) * 100)  # Retornar el porcentaje de outliers
+    })) %>%
+    pivot_longer(cols = where(is.numeric),
+                 names_to = "Variable", values_to = "Outliers (%)") %>%
+    pivot_wider(names_from = ActivityType, values_from = `Outliers (%)`) %>%
+    arrange(Variable)  # Reordenar por las variables
+}
+
+# Calcular outliers por cada tipo de actividad
+outliers_by_activity <- calculate_outliers_by_activity(data)
+
+# Mostrar los resultados
+print(outliers_by_activity)
+
+```
+
+```{r}
+# Variables y actividades que tienen más del 10% de outliers
+columns_to_impute <- c("gyroX.rad.s.", "gyroZ.rad.s.", "accelX.g.", "accelUserX.g.", "m21")
+activities_to_impute <- c("Coche Urbano 100", "Coche autopista", "Avion", "Bicicleta")
+
+# Función para imputar outliers usando la mediana dentro de cada actividad
+replace_outliers_by_activity_specific <- function(df, group_col = "ActivityType", outlier_threshold = 10) {
+  df_no_outliers <- df
+  df_no_outliers <- df_no_outliers %>%
+    group_by(!!sym(group_col)) %>%
+    mutate(across(all_of(columns_to_impute), ~ {
+      Q1 <- quantile(.x, 0.25, na.rm = TRUE)
+      Q3 <- quantile(.x, 0.75, na.rm = TRUE)
+      IQR <- Q3 - Q1
+      lower_limit <- Q1 - 1.5 * IQR
+      upper_limit <- Q3 + 1.5 * IQR
+      outlier_pct <- sum(.x < lower_limit | .x > upper_limit, na.rm = TRUE) / length(.x) * 100
+      
+      # Solo reemplazar los outliers si superan el umbral (10%)
+      if (outlier_pct > outlier_threshold) {
+        .[. < lower_limit | . > upper_limit] <- median(.x, na.rm = TRUE)
+      }
+      return(.)
+    })) %>%
+    ungroup()
+  
+  return(df_no_outliers)
+}
+
+# Filtrar solo las actividades con outliers altos
+data_filtered <- data %>%
+  filter(ActivityType %in% activities_to_impute)
+
+# Aplicar imputación de outliers en las actividades seleccionadas
+data_no_outliers_activity_replaced_specific <- replace_outliers_by_activity_specific(data_filtered)
+
+# Verificar los cambios después de reemplazar outliers
+summary(data_no_outliers_activity_replaced_specific)
+head(data_no_outliers_activity_replaced_specific)
+
+```
+
+```{r}
+# 2. Asegurar que los datos originales y modificados se combinen correctamente sin duplicar
+data_combined <- data %>%
+  left_join(data_no_outliers_activity_replaced_specific %>%
+              select(ActivityType, all_of(columns_to_impute)) %>%
+              rename_with(~paste0(., "_imputed"), all_of(columns_to_impute)), 
+            by = "ActivityType") %>%
+  # Mantener las columnas originales si no fueron modificadas
+  mutate(across(all_of(columns_to_impute), 
+                ~ ifelse(is.na(get(paste0(cur_column(), "_imputed"))), .x, get(paste0(cur_column(), "_imputed"))), 
+                .names = "{col}")) %>%
+  # Eliminar las columnas imputadas que no necesitamos
+  select(-ends_with("_imputed"))
+
+# Verificar los cambios
+summary(data_combined)
+head(data_combined)
+```
+
+```{r}
+# Verificar las columnas disponibles en el dataframe
+str(data)
+
+```
+
 ```{r}
 # Guardar el dataset modificado en el directorio de trabajo actual
-write.csv(data, "data_vars_eliminadas.csv", row.names = FALSE)
+write.csv(data, "data_vars_imputadas.csv", row.names = FALSE)
 
 # Mostrar el directorio de trabajo actual
 cat("El dataset ha sido guardado en el directorio de trabajo actual:", getwd())
@@ -756,46 +822,58 @@ barplot(imp_sorted$MeanDecreaseGini,
 
 ## **📊 Variables Seleccionadas**
 
-### **1️⃣ Dinámicas de Movimiento (Aceleración y Giroscopios)**
+Para desarrollar un sistema de clasificación del tipo de transporte, es crucial seleccionar las variables más relevantes y evitar redundancias. En este análisis, utilizamos tres enfoques principales:
 
-Estas variables son esenciales para **describir patrones característicos de movimiento**, como **aceleración, frenado y giros**, diferenciando entre tipos de transporte como automóviles, bicicletas o aviones.
+-   **Mapa de calor de correlaciones** para identificar relaciones fuertes entre variables.
 
--   ✅ **Aceleración:** `accelX.g.`, `accelZ.g., accelUserX.g.`, `accelUserY.g.`, `accelUserZ.g.`
+-   **Factores de Inflación de Varianza (VIF)** para detectar multicolinealidad.
 
--   ✅ **Giroscopios (Rotaciones):** `Roll.rads.`, `Pitch.rads.`, `Yaw.rads.`
+-   **Importancia de las variables (MeanDecreaseGini)** para evaluar su relevancia en la clasificación.
 
-📌 **Motivo de la selección:**\
-Las aceleraciones y rotaciones son **fundamentales** para identificar la dinámica del transporte, ya que diferentes medios de transporte presentan patrones específicos en estas variables.
+Se identificó **alta correlación** entre las variables de aceleración (`accelX.g`, `accelY.g`, `accelZ.g`), giroscopio (`gyroX.rad.s`, `gyroY.rad.s`, `gyroZ.rad.s`) y variables del grupo `m__` (`m11` a `m33`). Las variables de orientación (`Yaw.rads.`, `Pitch.rads.`, `Roll.rads.`) mostraron correlaciones moderadas con aceleraciones y giroscopios. Variables como `Pressure.kilopascals`, `RelativeAltitude.meters` y `herzios` mostraron **baja correlación con el resto**, indicando que aportan información única.
 
-### **2️⃣ Contexto Ambiental**
+Con base en el análisis, se seleccionaron las siguientes variables para el modelo:
 
-Estas variables aportan información **sobre las condiciones del entorno**, diferenciando **medios terrestres y aéreos**.
+### **✅ Variables de contexto (presión y altitud)**
 
--   ✅ **Presión atmosférica:** `Pressure.kilopascals.`
+-   `Pressure.kilopascals` → Información sobre presión atmosférica, útil para diferenciar transportes en diferentes altitudes (ej. avión vs. coche).
 
--   ✅ **Altitud relativa:** `RelativeAltitude.meters.`
+### **✅ Variable de frecuencia de muestreo**
 
-📌 **Motivo de la selección:**\
-La presión y altitud **permiten diferenciar transporte terrestre y aéreo**, proporcionando información crítica sobre la ubicación y altitud del movimiento.
+-   `herzios` → Puede indicar la tasa de muestreo del dispositivo, útil en la segmentación de datos.
 
-### **3️⃣ Componentes de Movimiento**
+### **✅ Variables de aceleración (movimiento en los ejes X, Y, Z)**
 
-Estas variables describen **transformaciones dinámicas en la trayectoria**, complementando la información de aceleración y rotación.
+-   `accelX.g`
 
--   ✅ `m12`, `m13`, `m22`, `m33`
+-   `accelY.g`
 
-📌 **Motivo de la selección:**\
-Aunque no están entre las más importantes individualmente, **mejoran la precisión en la identificación del tipo de transporte**, especialmente en escenarios más complejos.
+-   `accelZ.g`\
+    Estas variables permiten identificar patrones de movimiento y diferencias en los tipos de transporte basadas en fuerzas de aceleración.
 
-## **📌 Variables Excluidas**
+### **✅ Variables de giroscopio y orientación**
 
-Se decidió excluir variables con **baja relevancia relativa** o **redundancia**:
+-   `gyroZ.rad.s` → Se seleccionó este eje como el más representativo del giroscopio.
 
--   ❌ **Aceleración del usuario:** `accelUserY.g.` (redundantes con `accelX.g.` y `accelZ.g.`).
+-   `Pitch.rads.` → Inclinación hacia adelante o atrás, utili para transporte aéros.
 
--   ❌ **Giroscopios con menor relevancia:** `gyroX.rad.s.`, `gyroZ.rad.s.` (menor importancia en `MeanDecreaseGini`).
+-   `Roll.rads.` → Inclinación lateral, para identificar cambios de pendientes.
 
--   ❌ **Variables de orientación `q` eliminadas:** `qX`, `qY`, `qZ`, `qW` (baja importancia en RF y redundancia en orientación).
+-   Yaw.rads. → Rotación en el eje Z, clave para identificar cambios de dirección.
+
+### **✅ Variable representativa del grupo `m`**
+
+-   `m33` → Seleccionada como la más relevante según la importancia de variables (MeanDecreaseGini).
+
+## 📌 **Variables Excluidas**
+
+Se decidió excluir variables con baja relevancia relativa o redundancia:
+
+❌ **Variables del grupo `m`**: `m31`, `m21`, `m12`, `m11`, `m22`, `m32, m13, m23` (alta correlación entre sí, se mantiene solo `m33` por su mayor importancia).
+
+❌ **Giroscopios con menor relevancia**: `gyroY.rad.s.`, `gyroZ.rad.s.` (se selecciona solo `gyroZ.rad.s.` por su mayor impacto en MeanDecreaseGini).
+
+❌ **Aceleraciones redundantes**: `accelUserX.g`, `accelUserY.g`, `accelUserZ.g` (altamente correlacionadas con `accelX.g`, `accelY.g` y `accelZ.g`).
 
 ### **📊 Variables Seleccionadas y Justificación**
 
@@ -804,7 +882,7 @@ Las siguientes variables han sido retenidas porque:\
 ✔ **Son significativas en ANOVA (p \< 0.05).**\
 ✔ **No presentan colinealidad extrema según VIF.**
 
-![](images/clipboard-2531371232.png)
+![](images/clipboard-3932775431.png)
 
 # 9. Pasos a seguir:
 
