@@ -1,0 +1,455 @@
+---
+title: "Prediccion de Tipo de Transporte - Modelo SVM - Kernel Simoide - Proyecto de Transporte"
+output: html_notebook
+---
+
+### General: Objetivos del Proyecto y Definición de Variables
+
+El objetivo principal de este proyecto es desarrollar un modelo basado en **Máquinas de Vectores de Soporte (SVM)** para predecir el **modo de transporte** utilizado por un individuo en función de los datos recopilados por sensores de dispositivos móviles. Se busca analizar cómo las diferentes señales captadas por el acelerómetro, giróscopo, barómetro, GPS y magnetómetro pueden ser utilizadas para inferir con precisión el medio de transporte en uso.
+
+Para lograr esto, se cuenta con un conjunto de datos que incluye:
+
+1.  **Registro Temporal**
+
+    -   Cada observación está asociada a un instante de tiempo específico.
+
+2.  **Datos de Movimiento y Orientación**
+
+    -   **Acelerómetro**: Componentes X, Y, Z del vector aceleración.
+
+    -   **Giróscopo**: Velocidad angular en los ejes X, Y, Z y su derivada.
+
+    -   **Matriz de Rotación y Cuaterniones**: Representan la orientación tridimensional del dispositivo.
+
+3.  **Datos de Ubicación y Contexto**
+
+    -   **GPS**: Coordenadas de latitud y longitud, velocidad, altitud y rumbo.
+
+    -   **Presión Atmosférica**: Valores obtenidos del barómetro, junto con la altitud relativa.
+
+    -   **Campo Magnético Terrestre**: Medición en los ejes X, Y, Z.
+
+4.  **Variables Categóricas**
+
+    -   **Modo de Transporte**: La categoría que se busca predecir (caminar, bicicleta, automóvil, etc.).
+
+    -   **Nivel de Confianza**: Un indicador de la precisión estimada para la clasificación del transporte en los datos originales.
+
+### Objetivo Notebook:
+
+# **1. Carga de librerías**
+
+```{r}
+# Lista de paquetes necesarios
+necessary_packages <- c("dplyr", "caret", "e1071", "robustbase", "ggplot2", "data.table", "pROC","doParallel")
+
+# Instalar paquetes que no están instalados
+new_packages <- necessary_packages[!(necessary_packages %in% installed.packages()[, "Package"])]
+if (length(new_packages) > 0) {
+  install.packages(new_packages)
+}
+
+# Cargar todos los paquetes
+lapply(necessary_packages, library, character.only = TRUE)
+```
+
+```{r}
+# Cargar las librerías necesarias
+library(caret)      # Para división estratificada y evaluación de modelos
+library(scales)     # Para Min-Max Scaling
+library(e1071)      # Para entrenar SVM
+library(randomForest)  # Para obtener la importancia de las variables
+library(dplyr)      # Para manipulación de datos
+# Cargar la librería
+library(visdat)
+# Cargar la librería
+library(tidyr)
+# Cargar el paquete 'car'
+library(car)
+library(ggplot2)
+library(stringr) #Cambiar variables
+```
+
+# 2. Cargar el dataset
+
+```{r}
+# Ruta del archivo CSV (modificar según tu sistema)
+ruta_dataset <- "C:/Users/ngonzalez/Documents/Inesdi/Datos proyecto 8/proyect8/data_vars_imputadas.csv"
+data <- read.csv(ruta_dataset)
+
+
+data <- read.csv(ruta_dataset)
+
+# Resumen del dataset
+cat("### Información General del Dataset")
+dim(data) # Dimensiones del dataset
+str(data) # Estructura del dataset
+
+```
+
+```{r}
+summary(data) # Resumen estadístico básico
+```
+
+## 2.1 Selección de las Variables de acuerdo a RF, VIF y Anova
+
+```{r}
+# Seleccionar solo las variables relevantes
+data_filtrado <- data %>%
+  select(accelX.g., accelZ.g., accelY.g.,  # Aceleración
+         Roll.rads., Pitch.rads., Yaw.rads., gyroY.rad.s.,  # Giroscopios
+         Pressure.kilopascals., herzios,  # Contexto ambiental
+         m33,  # Componentes de Movimiento
+         ActivityType)  # Variable objetivo
+
+# Guardar el dataset actualizado
+write.csv(data_filtrado, "dataset_filtrado.csv", row.names = FALSE)
+
+# Mostrar primeras filas del dataset filtrado
+head(data_filtrado)
+```
+
+```{r}
+str ( data_filtrado)
+```
+
+# 3. Implementar `class.weights` combinado para ajustar el desbalance de clases.
+
+La combinación de pesos manuales y los pesos inversos puede ser eficaz para balancear la influencia de las clases en el modelo. Los pesos manuales se basan en un conocimiento previo sobre la importancia relativa de cada clase, mientras que los pesos inversos ajustan la influencia según la frecuencia de las clases en los datos.
+
+**Implementación de Promediado de Pesos**: Para calcular los pesos combinados, utilizamos una combinación de los pesos manuales y los inversos. Estos pesos se promedian para generar una estrategia equilibrada.
+
+```{r}
+# Convertir la variable objetivo a factor (si no lo está)
+data_filtrado$ActivityType <- as.factor(data_filtrado$ActivityType)
+
+# 1 Convertir Herzios a numérico
+data_filtrado <- data_filtrado %>%
+  mutate(herzios = as.numeric(herzios))
+
+# Verificar que Herzios ahora es numérico
+str(data_filtrado$herzios)
+summary(data_filtrado$herzios)
+```
+
+```{r}
+# Identificar solo las columnas numéricas (excluyendo `ActivityType`)
+num_cols <- sapply(data_filtrado, is.numeric)
+
+# Aplicar Min-Max Scaling SOLO a las columnas numéricas
+preproc <- preProcess(data_filtrado[, num_cols], method = c("range"))
+data_scaled <- predict(preproc, data_filtrado[, num_cols])
+
+# Volver a agregar la variable objetivo `ActivityType`
+data_scaled$ActivityType <- data_filtrado$ActivityType
+
+# Verificar la estructura del dataset escalado
+str(data_scaled)
+summary(data_scaled)
+```
+
+```{r}
+# Verificar si hay NA después del escalado
+print("🔎 ¿Hay valores NA después del escalado?")
+print(any(is.na(data_scaled)))  # Debe ser FALSE
+
+# Verificar si las variables están en el rango correcto [0,1]
+summary(data_scaled)
+```
+
+```{r}
+# Aplciar nuevos pesos
+class_weights_pesado <- c("Andando" = 10, "Autobus" = 15, "Avion" = 60, 
+                   "Bicicleta" = 5, "Coche_autopista" = 10, "Coche_urbano" = 1)
+
+# **2. Normalización de pesos manuales (usando el máximo en vez de la suma)**
+class_weights_pesado <- class_weights_pesado / max(class_weights_pesado)
+print("Pesos manuales normalizados:")
+print(class_weights_pesado)
+
+# **3. Calcular pesos inversamente proporcionales al tamaño de cada clase**
+class_counts <- table(data_scaled$ActivityType)
+class_weights_auto <- 1 / class_counts  # Inversamente proporcional al número de muestras
+
+# **4. Normalizar los pesos automáticos usando el máximo para escala relativa**
+class_weights_auto <- class_weights_auto / max(class_weights_auto)
+
+# **5. Asegurar que ambos vectores tengan las mismas clases**
+names(class_weights_auto) <- names(class_counts)
+
+# **6. Combinar los pesos manuales y automáticos con ponderación**
+# ✔ 70% de pesos automáticos y 30% de pesos manuales para evitar sesgos excesivos
+clases_comunes <- intersect(names(class_weights_pesado), names(class_weights_auto))
+class_weights_combined <- (0.8 * class_weights_auto[clases_comunes]) + (0.2 * class_weights_pesado[clases_comunes])
+
+# **7. Mostrar los pesos combinados normalizados**
+print("Pesos combinados normalizados:")
+print(class_weights_combined)
+
+
+```
+
+```{r}
+set.seed(123)
+trainIndex <- createDataPartition(data_scaled$ActivityType, p = 0.80, list = FALSE)
+train_data <- data_scaled[trainIndex, ]
+test_data <- data_scaled[-trainIndex, ]
+```
+
+```{r}
+print(colnames(train_data))
+print(colnames(test_data))
+
+```
+
+```{r}
+print(table(train_data$ActivityType))
+print(table(test_data$ActivityType))
+
+```
+
+# 4. Entrenar Modelo Kermel Simoide:
+
+Dado que los resultados con el kernel radial han mostrado un buen rendimiento general, pero aún presentan ciertos desafíos con el desbalanceo de clases, se considera probar el **kernel sigmoide**. Este kernel puede ser útil en problemas donde los datos no sean perfectamente separables mediante una frontera estricta, ya que introduce una transformación más flexible similar a las redes neuronales.
+
+Sin embargo, es importante señalar que el principal factor que afecta la clasificación sigue siendo el **desbalanceo de clases**, lo que podría generar sesgo en el modelo sin importar el kernel utilizado. Por ello, además de probar el kernel sigmoide, es recomendable continuar ajustando los pesos de clase.
+
+## 4.1 Kernel Simoide con clase combinada
+
+```{r}
+library(e1071)
+
+# Definir hiperparámetros
+best_C <- 1
+best_gamma <- 0.1
+best_coef0 <- 1
+
+# Capturar tiempo de inicio del entrenamiento
+start_train_time <- Sys.time()
+
+# Entrenar el modelo SVM con kernel sigmoide
+svm_model_sigmoid <- svm(ActivityType ~ ., 
+                         data = train_data, 
+                         kernel = "sigmoid",
+                         cost = best_C,
+                         gamma = best_gamma,
+                         coef0 = best_coef0,
+                         class.weights = class_weights_combined,
+                         probability = TRUE)
+
+# Capturar tiempo de finalización del entrenamiento
+end_train_time <- Sys.time()
+train_duration <- end_train_time - start_train_time
+
+# Imprimir tiempo de entrenamiento
+print(paste("Tiempo de entrenamiento:", train_duration))
+
+```
+
+```{r}
+# Capturar tiempo de inicio de la predicción
+start_pred_time <- Sys.time()
+
+# Hacer predicciones con el modelo SVM Sigmoide
+predictions <- predict(svm_model_sigmoid, test_data, probability = TRUE)
+
+# Capturar tiempo de finalización de la predicción
+end_pred_time <- Sys.time()
+
+# Calcular la duración de la predicción
+pred_duration <- end_pred_time - start_pred_time
+
+# Imprimir el tiempo de predicción
+print(paste("Tiempo de predicción:", pred_duration))
+
+
+```
+
+```{r}
+# Matriz de confusión
+conf_matrix <- confusionMatrix(predictions, test_data$ActivityType)
+print(conf_matrix)
+
+# Extraer métricas específicas
+precision <- conf_matrix$byClass[, "Pos Pred Value"]  # Precisión por clase
+recall <- conf_matrix$byClass[, "Sensitivity"]        # Recall por clase
+f1_score <- 2 * (precision * recall) / (precision + recall)  # F1-score
+
+# 📌 Mostrar resultados de precisión, recall y F1-score
+metrics_results <- data.frame(Class = levels(test_data$ActivityType),
+                              Precision = precision,
+                              Recall = recall,
+                              F1_Score = f1_score)
+
+print(metrics_results)
+
+```
+
+```{r}
+library(ggplot2)
+
+# Generar predicciones en los datos de prueba
+pred <- predict(svm_model_sigmoid, test_data)
+
+# Asegurar que test_data solo tiene variables numéricas antes de PCA
+test_data_numeric <- test_data %>%
+  select(-ActivityType) %>%
+  mutate_if(is.character, as.numeric)  # Convertir caracteres a numéricos si hay errores
+
+# Aplicar PCA a los datos de prueba
+pca_result <- prcomp(scale(test_data_numeric))
+
+# Crear un dataframe con los resultados del PCA y las predicciones del modelo
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1], 
+  PC2 = pca_result$x[, 2], 
+  Predicción = pred,  # Agregamos la predicción del modelo
+  Clase_Real = test_data$ActivityType  # Agregamos la clase real
+)
+
+# Graficar la separación de clases usando PCA (según la predicción del modelo)
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Predicción, shape = Clase_Real)) +
+  geom_point(alpha = 0.6, size = 2) +  
+  labs(title = "Separación de Clases con PCA en SVM - Simoidal - Balance Combinado",
+       x = "PC1",
+       y = "PC2") +
+  theme_minimal()
+
+```
+
+Los resultados obtenidos con el **SVM con kernel sigmoidal** muestran mejoras en algunas clases, pero aún existen desafíos en la clasificación de ciertas categorías. En términos generales, las clases **Bicicleta, Coche_autopista y Coche_urbano** fueron correctamente identificadas con valores de **F1-Score superiores a 0.94**, lo que indica que el modelo logró una buena precisión y recuperación en estas categorías. Sin embargo, persisten problemas en la clasificación de la clase **Avión**, con un **F1-Score de 0.46**, debido a una baja sensibilidad (**Recall: 0.30**), lo que sugiere que el modelo sigue confundiendo esta categoría con otras.
+
+El análisis de PCA muestra que el modelo logra una separación visualmente aceptable entre las clases, aunque sigue existiendo cierto solapamiento entre categorías como **Autobús y Coche_urbano**. A pesar de que se aplicaron técnicas de balanceo de clases, como la ponderación ajustada, el desempeño en clases minoritarias sigue siendo un reto. Para mejorar estos resultados, se podría considerar una combinación de técnicas, como la optimización de hiperparámetros más exhaustiva, el uso de técnicas de remuestreo más avanzadas (como Cluster-Based Resampling) y la exploración de otros kernels más adecuados para la estructura de los datos.
+
+## 4.2 Búsqueda del mejor parámetro.
+
+Durante el proceso de ajuste de hiperparámetros del modelo SVM con kernel sigmoidal, se enfrentó un desafío técnico al realizar la búsqueda de hiperparámetros en **R**. Aunque R es un lenguaje robusto para la ciencia de datos, en este caso, la búsqueda de parámetros como **C** y **gamma** a través de validación cruzada resultó ser muy costosa en términos de recursos. A medida que aumentaba el número de combinaciones de parámetros y el tamaño del conjunto de datos, el proceso se volvió extremadamente lento, llegando a esperar hasta **3 horas** por resultados sin obtener éxito. En muchos casos, el sistema colapsaba debido a la gran demanda de memoria y procesamiento, lo que hacía que la operación fuera insostenible.
+
+Este inconveniente fue causado por la falta de optimización de R en cuanto a la paralelización de tareas y la gestión de memoria al realizar búsquedas exhaustivas de hiperparámetros. R no logró manejar de manera eficiente la carga computacional derivada de la validación cruzada con múltiples combinaciones de parámetros, lo que resultó en un tiempo de espera largo y un sistema inestable. Esto demostró que R no era la mejor opción en este caso específico, dado que la operación estaba limitando el progreso del análisis.
+
+Por lo tanto, se decidió cambiar a **Python**, conocido por su eficiencia y capacidad de manejar grandes volúmenes de datos y operaciones paralelizadas. Python, con bibliotecas como **scikit-learn** y **joblib**, permite la distribución de tareas entre múltiples núcleos de procesamiento, lo que optimiza significativamente el tiempo de cálculo. Gracias a estas capacidades de optimización, la búsqueda de hiperparámetros se completó con éxito y en tiempos mucho más cortos, permitiendo obtener los mejores parámetros para el modelo de manera estable y sin colapsos en el sistema. Esto hizo que Python fuera la opción ideal para realizar la tarea de manera eficiente y escalable.
+
+Una vez obtenidos los mejores hiperparámetros en Python, se utilizaron en **R** para verificar los resultados y garantizar que los parámetros seleccionados también fueran efectivos al replicar el análisis en dicho entorno.
+
+```{r}
+library(e1071)
+
+# Definir hiperparámetros
+best_C <- 10
+best_gamma <- 0.1
+
+
+# Capturar tiempo de inicio del entrenamiento
+start_train_time <- Sys.time()
+
+# Entrenar el modelo SVM con kernel sigmoide
+svm_model_sigmoid_10 <- svm(ActivityType ~ ., 
+                         data = train_data, 
+                         kernel = "sigmoid",
+                         cost = best_C,
+                         gamma = best_gamma,
+                         class.weights = class_weights_combined,
+                         probability = TRUE)
+
+# Capturar tiempo de finalización del entrenamiento
+end_train_time <- Sys.time()
+train_duration <- end_train_time - start_train_time
+
+# Imprimir tiempo de entrenamiento
+print(paste("Tiempo de entrenamiento:", train_duration))
+
+```
+
+```{r}
+# Capturar tiempo de inicio de la predicción
+start_pred_time <- Sys.time()
+
+# Hacer predicciones con el modelo SVM Sigmoide
+predictions_10 <- predict(svm_model_sigmoid_10, test_data, probability = TRUE)
+
+# Capturar tiempo de finalización de la predicción
+end_pred_time <- Sys.time()
+
+# Calcular la duración de la predicción
+pred_duration <- end_pred_time - start_pred_time
+
+# Imprimir el tiempo de predicción
+print(paste("Tiempo de predicción:", pred_duration))
+
+```
+
+```{r}
+# Matriz de confusión
+conf_matrix_10 <- confusionMatrix(predictions_10, test_data$ActivityType)
+print(conf_matrix)
+
+# Extraer métricas específicas
+precision <- conf_matrix_10$byClass[, "Pos Pred Value"]  # Precisión por clase
+recall <- conf_matrix_10$byClass[, "Sensitivity"]        # Recall por clase
+f1_score <- 2 * (precision * recall) / (precision + recall)  # F1-score
+
+# 📌 Mostrar resultados de precisión, recall y F1-score
+metrics_results <- data.frame(Class = levels(test_data$ActivityType),
+                              Precision = precision,
+                              Recall = recall,
+                              F1_Score = f1_score)
+
+print(metrics_results)
+
+```
+
+```{r}
+library(ggplot2)
+
+# Generar predicciones en los datos de prueba
+pred <- predict(svm_model_sigmoid_10, test_data)
+
+# Asegurar que test_data solo tiene variables numéricas antes de PCA
+test_data_numeric <- test_data %>%
+  select(-ActivityType) %>%
+  mutate_if(is.character, as.numeric)  # Convertir caracteres a numéricos si hay errores
+
+# Aplicar PCA a los datos de prueba
+pca_result <- prcomp(scale(test_data_numeric))
+
+# Crear un dataframe con los resultados del PCA y las predicciones del modelo
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1], 
+  PC2 = pca_result$x[, 2], 
+  Predicción = pred,  # Agregamos la predicción del modelo
+  Clase_Real = test_data$ActivityType  # Agregamos la clase real
+)
+
+# Graficar la separación de clases usando PCA (según la predicción del modelo)
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Predicción, shape = Clase_Real)) +
+  geom_point(alpha = 0.6, size = 2) +  
+  labs(title = "Separación de Clases con PCA en SVM - Simoidal - Balance Combinado",
+       x = "PC1",
+       y = "PC2") +
+  theme_minimal()
+
+```
+
+En el proceso de desarrollo del modelo para la clasificación del tipo de transporte, se utilizaron dos lenguajes de programación, **Python** y **R**, con el fin de implementar el modelo de **Máquinas de Vectores de Soporte (SVM)** con un **kernel sigmoidal**. Sin embargo, los resultados obtenidos en ambos lenguajes presentaron diferencias significativas, especialmente en cuanto al **accuracy** y las **métricas de rendimiento**.
+
+#### **Diferencias en el Rendimiento entre R y Python**
+
+1.  **Uso de Librerías y Ajustes de Modelo:**
+
+    -   **Python**: Se utilizó **`scikit-learn`** para entrenar el modelo SVM, donde se aplicó una **búsqueda de hiperparámetros** con **`GridSearchCV`** y validación cruzada. Esta biblioteca está altamente optimizada para trabajar con modelos de machine learning y es muy eficiente en cuanto a manejo de memoria y paralelización, lo que permite ajustar de manera efectiva los hiperparámetros y obtener un modelo robusto. En este entorno, se logró un rendimiento perfecto (accuracy de 1.0) tanto en el conjunto de entrenamiento como en el de prueba.
+
+    -   **R**: En R, se utilizó **`e1071`** para implementar el modelo SVM. Aunque se aplicaron técnicas de **pesos de clase** y **SMOTE** para balancear las clases, los resultados fueron diferentes. El modelo en **R** mostró un **accuracy del 89.95%** en los datos de prueba, lo que refleja una diferencia significativa respecto a los resultados obtenidos en **Python**. Aunque R tiene paquetes potentes para clasificación, como **`e1071`** y **`caret`**, la optimización de los parámetros y la capacidad de paralelización no están tan desarrolladas como en Python, lo que pudo haber afectado los resultados.
+
+2.  **Manejo del Desbalanceo de Clases:**
+
+    -   En **Python**, el balanceo de clases se manejó de forma automática mediante el parámetro `class_weight='balanced'` en el modelo SVM, lo que permitió que el modelo prestara más atención a las clases minoritarias, optimizando el rendimiento para esas clases. Esta característica está integrada en **`scikit-learn`** y facilita el manejo de datasets desbalanceados sin necesidad de ajustes manuales.
+
+    -   En **R**, aunque se utilizó **SMOTE** y se ajustaron **pesos manuales** para balancear las clases, el proceso no fue tan automático como en Python. En **R**, el ajuste manual de los **pesos de clase** o el uso de **SMOTE** requiere intervención explícita, y los resultados mostraron que el modelo podría no haber aprovechado completamente estas técnicas, lo que resultó en un rendimiento inferior en los datos de prueba.
+
+El modelo de **SVM con kernel sigmoidal** mostró diferencias de rendimiento entre **R** y **Python** debido a varios factores. En **Python**, la **búsqueda de hiperparámetros** con **`GridSearchCV`** y el **balanceo automático de clases** mediante `class_weight='balanced'` optimizaron el rendimiento, lo que resultó en un **accuracy del 100%** tanto en los datos de entrenamiento como en los de prueba. Además, la capacidad de **paralelización** y optimización de **scikit-learn** permitió un ajuste eficiente.
+
+En **R**, aunque se aplicaron pesos inversos y **pesos manuales** para balancear las clases, el proceso no fue tan automático ni optimizado como en Python. La falta de una búsqueda de hiperparámetros tan exhaustiva y las limitaciones en la gestión de recursos computacionales también contribuyeron a que el modelo tuviera un **accuracy inferior** en los datos de prueba (89.95%).
+
+En resumen, **Python** ofreció una ventaja significativa en términos de optimización, manejo de recursos y herramientas avanzadas, lo que permitió obtener mejores resultados en este caso.
+
+![](images/clipboard-3349399504.png)
