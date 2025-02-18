@@ -1,0 +1,627 @@
+---
+title: "Prediccion de Tipo de Transporte - Proyecto de Transporte"
+output: html_notebook
+---
+
+### General: Objetivos del Proyecto y Definición de Variables
+
+El objetivo principal de este proyecto es desarrollar un modelo basado en **Máquinas de Vectores de Soporte (SVM)** para predecir el **modo de transporte** utilizado por un individuo en función de los datos recopilados por sensores de dispositivos móviles. Se busca analizar cómo las diferentes señales captadas por el acelerómetro, giróscopo, barómetro, GPS y magnetómetro pueden ser utilizadas para inferir con precisión el medio de transporte en uso.
+
+Para lograr esto, se cuenta con un conjunto de datos que incluye:
+
+1.  **Registro Temporal**
+
+    -   Cada observación está asociada a un instante de tiempo específico.
+
+2.  **Datos de Movimiento y Orientación**
+
+    -   **Acelerómetro**: Componentes X, Y, Z del vector aceleración.
+
+    -   **Giróscopo**: Velocidad angular en los ejes X, Y, Z y su derivada.
+
+    -   **Matriz de Rotación y Cuaterniones**: Representan la orientación tridimensional del dispositivo.
+
+3.  **Datos de Ubicación y Contexto**
+
+    -   **GPS**: Coordenadas de latitud y longitud, velocidad, altitud y rumbo.
+
+    -   **Presión Atmosférica**: Valores obtenidos del barómetro, junto con la altitud relativa.
+
+    -   **Campo Magnético Terrestre**: Medición en los ejes X, Y, Z.
+
+4.  **Variables Categóricas**
+
+    -   **Modo de Transporte**: La categoría que se busca predecir (caminar, bicicleta, automóvil, etc.).
+
+    -   **Nivel de Confianza**: Un indicador de la precisión estimada para la clasificación del transporte en los datos originales.
+
+### Objetivo Notebook:
+
+-   Evaluar el rendimiento del modelo Support Vector Machine (SVM) con diferentes configuraciones del kernel radial.
+
+-   Optimizar el modelo SVM mediante la búsqueda de hiperparámetros.
+
+-   Generar predicciones utilizando el conjunto de test 1.
+
+-   Evaluar el modelo en el conjunto de test 2.
+
+# **1. Carga de librerías**
+
+```{r}
+# Lista de paquetes necesarios
+necessary_packages <- c("dplyr", "caret", "e1071", "robustbase", "ggplot2", "data.table", "pROC","doParallel")
+
+# Instalar paquetes que no están instalados
+new_packages <- necessary_packages[!(necessary_packages %in% installed.packages()[, "Package"])]
+if (length(new_packages) > 0) {
+  install.packages(new_packages)
+}
+
+# Cargar todos los paquetes
+lapply(necessary_packages, library, character.only = TRUE)
+```
+
+```{r}
+# Cargar las librerías necesarias
+library(caret)      # Para división estratificada y evaluación de modelos
+library(scales)     # Para Min-Max Scaling
+library(e1071)      # Para entrenar SVM
+library(randomForest)  # Para obtener la importancia de las variables
+library(dplyr)      # Para manipulación de datos
+# Cargar la librería
+library(visdat)
+# Cargar la librería
+library(tidyr)
+# Cargar el paquete 'car'
+library(car)
+library(ggplot2)
+library(stringr) #Cambiar variables
+
+
+```
+
+# 2. Cargar el dataset
+
+```{r}
+# Ruta del archivo CSV (modificar según tu sistema)
+ruta_dataset <- "C:/Users/ngonzalez/Documents/Inesdi/Datos proyecto 8/proyect8/data_vars_imputadas.csv"
+data <- read.csv(ruta_dataset)
+
+
+data <- read.csv(ruta_dataset)
+
+# Resumen del dataset
+cat("### Información General del Dataset")
+dim(data) # Dimensiones del dataset
+str(data) # Estructura del dataset
+
+```
+
+```{r}
+summary(data) # Resumen estadístico básico
+```
+
+## 2.1 Selección de las Variables de acuerdo a RF, VIF y Anova
+
+```{r}
+# Seleccionar solo las variables relevantes
+data_filtrado <- data %>%
+  select(accelX.g., accelZ.g., accelY.g.,  # Aceleración
+         Roll.rads., Pitch.rads., Yaw.rads., gyroY.rad.s.,  # Giroscopios
+         Pressure.kilopascals., herzios,  # Contexto ambiental
+         m33,  # Componentes de Movimiento
+         ActivityType)  # Variable objetivo
+
+# Guardar el dataset actualizado
+write.csv(data_filtrado, "dataset_filtrado.csv", row.names = FALSE)
+
+# Mostrar primeras filas del dataset filtrado
+head(data_filtrado)
+```
+
+```{r}
+str( data_filtrado)
+```
+
+```{r}
+# Variables numéricas en el dataset
+numeric_vars <- names(data_filtrado)[sapply(data_filtrado, is.numeric)]
+
+# Graficar histogramas para cada variable numérica
+par(mfrow = c(3, 3))  # Organizar en una matriz de 3x3
+for (var in numeric_vars) {
+  hist(data_filtrado[[var]], main = paste("Histograma de", var), col = "skyblue", border = "white")
+}
+
+```
+
+# 3. Crear nuevas variables
+
+Para mejorar la clasificación en el modelo de SVM con kernel radial, se crearon nuevas variables como la **aceleración absoluta**, que combina las tres componentes de aceleración (X, Y, Z), y la **combinación de Roll y Yaw**, que captura el comportamiento de rotación del vehículo. Además, se introdujo la **combinación de aceleración y ángulos** para capturar la relación entre el movimiento y la orientación del vehículo, lo cual es crucial para diferenciar actividades como **Avión** y **Autobús**, que presentan características de movimiento distintas. Estas nuevas variables permitieron una mejor discriminación entre las clases, especialmente para las actividades más difíciles de clasificar, como el **Avión**.
+
+### 3.1. **Aceleración absoluta**:
+
+La aceleración absoluta es una medida general de la aceleración que combina las tres direcciones de la aceleración (X, Y, Z) para representar la magnitud total del movimiento. Esta variable puede ser útil para identificar patrones de aceleración general en el comportamiento de diferentes modos de transporte, como vehículos en movimiento o aviones. **Impacto Esperado**: Esta variable puede ser crucial para distinguir entre los modos de transporte que implican movimientos más suaves y aquellos que son más dinámicos o abruptos.
+
+```{r}
+data_filtrado$accel_absolute <- sqrt(data_filtrado$accelX.g.^2 + 
+                                            data_filtrado$accelY.g.^2 + 
+                                            data_filtrado$accelZ.g.^2)
+
+```
+
+### 3.2. **Combinación de Roll y Yaw**:
+
+El comportamiento de rotación en el espacio se puede capturar combinando los ángulos de roll y yaw. Estos ángulos representan la inclinación del vehículo (hacia los lados o hacia adelante/atrás) y la dirección de rotación, lo cual puede ser esencial para el modelo, especialmente en modos de transporte como aviones o vehículos en curvas. Esto puede incluir la diferencia entre ambos, la suma o incluso la raíz cuadrada de su suma al cuadrado:
+
+```{r}
+data_filtrado$roll_yaw_combined <- sqrt(data_filtrado$Roll.rads.^2 + 
+                                               data_filtrado$Yaw.rads.^2)
+
+```
+
+### 3.3 **Combinación de Aceleración y Ángulos**
+
+En algunos modos de transporte, como los automóviles en carretera o autopista, la combinación de aceleración con orientación puede ser muy informativa. Las actividades que muestran una aceleración constante, como en una carretera, pueden diferenciarse de las que presentan variaciones significativas, como los aviones durante el despegue.
+
+```{r}
+data_filtrado$accel_angle_combined <- data_filtrado$accel_absolute * 
+                                             sqrt(data_filtrado$Roll.rads.^2 + 
+                                                  data_filtrado$Yaw.rads.^2 + 
+                                                  data_filtrado$Pitch.rads.^2)
+
+```
+
+```{r}
+str(data_filtrado)
+```
+
+# 3. Implementar `class.weights` para ajustar el desbalance de clases.
+
+La combinación de pesos manuales y los pesos inversos puede ser eficaz para balancear la influencia de las clases en el modelo. Los pesos manuales se basan en un conocimiento previo sobre la importancia relativa de cada clase, mientras que los pesos inversos ajustan la influencia según la frecuencia de las clases en los datos.
+
+**Implementación de Promediado de Pesos**: Para calcular los pesos combinados, utilizamos una combinación de los pesos manuales y los inversos. Estos pesos se promedian para generar una estrategia equilibrada.
+
+```{r}
+# Convertir la variable objetivo a factor (si no lo está)
+data_filtrado$ActivityType <- as.factor(data_filtrado$ActivityType)
+
+# 1 Convertir Herzios a numérico
+data_filtrado <- data_filtrado %>%
+  mutate(herzios = as.numeric(herzios))
+
+# Verificar que Herzios ahora es numérico
+str(data_filtrado$herzios)
+summary(data_filtrado$herzios)
+```
+
+```{r}
+# Identificar solo las columnas numéricas (excluyendo `ActivityType`)
+num_cols <- sapply(data_filtrado, is.numeric)
+
+# Aplicar Min-Max Scaling SOLO a las columnas numéricas
+preproc <- preProcess(data_filtrado[, num_cols], method = c("range"))
+data_scaled <- predict(preproc, data_filtrado[, num_cols])
+
+# Volver a agregar la variable objetivo `ActivityType`
+data_scaled$ActivityType <- data_filtrado$ActivityType
+
+# Verificar la estructura del dataset escalado
+str(data_scaled)
+summary(data_scaled)
+```
+
+```{r}
+# Verificar si hay NA después del escalado
+print("🔎 ¿Hay valores NA después del escalado?")
+print(any(is.na(data_scaled)))  # Debe ser FALSE
+
+# Verificar si las variables están en el rango correcto [0,1]
+summary(data_scaled)
+```
+
+```{r}
+
+# Aplciar nuevos pesos
+class_weights_pesado <- c("Andando" = 10, "Autobus" = 15, "Avion" = 60, 
+                   "Bicicleta" = 5, "Coche_autopista" = 10, "Coche_urbano" = 1)
+
+# **2. Normalización de pesos manuales (usando el máximo en vez de la suma)**
+class_weights_pesado <- class_weights_pesado / max(class_weights_pesado)
+print("Pesos manuales normalizados:")
+print(class_weights_pesado)
+
+# **3. Calcular pesos inversamente proporcionales al tamaño de cada clase**
+class_counts <- table(data_scaled$ActivityType)
+class_weights_auto <- 1 / class_counts  # Inversamente proporcional al número de muestras
+
+# **4. Normalizar los pesos automáticos usando el máximo para escala relativa**
+class_weights_auto <- class_weights_auto / max(class_weights_auto)
+
+# **5. Asegurar que ambos vectores tengan las mismas clases**
+names(class_weights_auto) <- names(class_counts)
+
+# **6. Combinar los pesos manuales y automáticos con ponderación**
+# ✔ 70% de pesos automáticos y 30% de pesos manuales para evitar sesgos excesivos
+clases_comunes <- intersect(names(class_weights_pesado), names(class_weights_auto))
+class_weights_combined <- (0.8 * class_weights_auto[clases_comunes]) + (0.2 * class_weights_pesado[clases_comunes])
+
+# **7. Mostrar los pesos combinados normalizados**
+print("Pesos combinados normalizados:")
+print(class_weights_combined)
+
+
+```
+
+```{r}
+str(data_scaled)
+```
+
+```{r}
+# Revisa si hay NA en m33
+sum(is.na(data_scaled$m33))
+
+# Revisa si hay valores extremos (más allá del rango esperado)
+summary(data_scaled$m33)
+
+```
+
+```{r}
+# Dividimos los datos en entrenamiento y prueba
+set.seed(123)  # Para asegurar reproducibilidad
+train_index <- createDataPartition(data_scaled$ActivityType, p = 0.8, list = FALSE)
+train_data <- data_scaled[train_index, ]
+test_data <- data_scaled[-train_index, ]
+```
+
+# 4. Entrenar Modelo Kermel Radial:
+
+## 4.1 SVM con Kernel: Radial y pesos combinados
+
+```{r}
+# Convertir ActivityType en factor (asegurarse de que es categórica)
+train_data$ActivityType <- as.factor(train_data$ActivityType)
+test_data$ActivityType <- as.factor(test_data$ActivityType)
+
+# Ahora entrenamos el modelo
+start_time <- Sys.time()
+
+svm_model_combined <- svm(ActivityType ~ ., data = train_data, 
+                          kernel = "radial", cost = 1, gamma = 0.01, 
+                          class.weights = class_weights_combined)
+
+# Registrar el tiempo de finalización del entrenamiento
+end_time <- Sys.time()
+
+# Calcular el tiempo de entrenamiento
+training_time <- end_time - start_time
+cat("Tiempo de entrenamiento SVM:", training_time, "\n")
+
+```
+
+```{r}
+pred_2 <- predict(svm_model_combined, test_data)
+
+# Matriz de confusión
+conf_matrix_2 <- confusionMatrix(pred_2, test_data$ActivityType)
+print(conf_matrix_2)
+
+# Extraer métricas específicas
+precision <- conf_matrix_2$byClass[, "Pos Pred Value"]  # Precisión por clase
+recall <- conf_matrix_2$byClass[, "Sensitivity"]        # Recall por clase
+f1_score <- 2 * (precision * recall) / (precision + recall)  # F1-score
+
+# 📌 Mostrar resultados de precisión, recall y F1-score
+metrics_results_2 <- data.frame(Class = levels(test_data$ActivityType),
+                              Precision = precision,
+                              Recall = recall,
+                              F1_Score = f1_score)
+
+print(metrics_results_2)
+```
+
+```{r}
+# Generar predicciones en los datos de prueba
+predictions <- predict(svm_model_combined, test_data)
+
+```
+
+```{r}
+library(ggplot2)
+library(ggfortify)
+
+# Generar predicciones en los datos de prueba
+pred <- predict(svm_model_combined, test_data)
+
+# Asegurar que test_data solo tiene variables numéricas antes de PCA
+test_data_numeric <- test_data %>%
+  select(-ActivityType) %>%
+  mutate_if(is.character, as.numeric)  # Convertir caracteres a numéricos si es necesario
+
+# Aplicar PCA a los datos de prueba
+pca_result <- prcomp(test_data_numeric, scale. = TRUE)
+
+# Crear un dataframe con los resultados del PCA y las predicciones del modelo
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1], 
+  PC2 = pca_result$x[, 2], 
+  Predicción = pred,  # Agregamos la predicción del modelo
+  Clase_Real = test_data$ActivityType  # Agregamos la clase real
+)
+
+# Graficar PCA con predicciones del modelo combinado
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Predicción, shape = Clase_Real)) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Separación de Clases con PCA en SVM - Peso Combinado",
+       x = "PC1",
+       y = "PC2") +
+  theme_minimal()
+
+```
+
+En este estudio, se introdujeron nuevas variables para mejorar la clasificación de actividades, especialmente aquellas que previamente no se separaban adecuadamente. Se agregaron tres nuevas variables: **aceleración absoluta**, que combina las tres componentes de aceleración (X, Y y Z), **combinación de los ángulos de Roll y Yaw** para capturar la rotación, y **combinación de aceleración y ángulos** que mezcla la aceleración total con los tres ángulos de rotación (Roll, Yaw y Pitch). Estas variables permitieron al modelo captar mejor la dinámica de las actividades, como la diferencia entre un avión despegando y un autobús en movimiento.
+
+Los resultados mostraron que el modelo entrenado con estas nuevas variables alcanzó una **precisión global de 98.51%**, mejorando especialmente la clasificación de clases como "Avión" y "Autobús", que antes presentaban confusión. En la matriz de confusión, el modelo mostró una **excelente capacidad para clasificar todas las clases**, con un **Kappa de 0.9798**, indicando una excelente concordancia entre las predicciones y los valores reales. Las métricas de precisión, recall y F1-score también demostraron un buen rendimiento en todas las clases, destacando la mejora en clases minoritarias. En resumen, las nuevas variables ayudaron a mejorar la precisión del modelo sin afectar el rendimiento global, logrando una mejor separación entre las clases de transporte.
+
+### 4.3 Busqueda del mejor modelo
+
+La **búsqueda de hiperparámetros** es un proceso esencial en el desarrollo de modelos de Machine Learning, cuyo objetivo es encontrar la combinación más adecuada de parámetros que maximice el rendimiento del modelo. En el caso de un **Support Vector Machine (SVM)** con kernel radial, los parámetros más relevantes son:
+
+-   **`C`**: Es el parámetro de penalización que controla la compensación entre margen y los errores de clasificación. Un valor bajo permite más errores en la clasificación, mientras que un valor alto obliga al modelo a ajustarse más estrictamente a los datos, lo que puede resultar en sobreajuste.
+
+-   **`sigma` (conocido como `gamma`)**: Este parámetro regula la forma del kernel radial, afectando cómo se miden las distancias entre las muestras. Un valor pequeño de `sigma` hace que el modelo sea más suave y generalice mejor, mientras que un valor grande puede resultar en un modelo que se ajusta demasiado a los datos de entrenamiento, reduciendo su capacidad de generalización.
+
+### **Pasos para la Búsqueda de Hiperparámetros:**
+
+1.  **Definición de la Malla de Hiperparámetros:** El primer paso en la búsqueda de los mejores parámetros es definir una **malla de hiperparámetros**. Esta malla consiste en un conjunto de valores posibles para `C` y `sigma` que el modelo probará durante el proceso de entrenamiento. La malla se elige en función de los valores que se consideran más relevantes o que se sabe que pueden ofrecer buenos resultados según el tipo de problema y los datos.
+
+2.  **Estrategia de Validación Cruzada:** Para evaluar la eficacia de cada combinación de hiperparámetros, se utiliza **validación cruzada**. Este método divide el conjunto de datos en varios subconjuntos o "pliegues". El modelo se entrena en algunos de estos subconjuntos y se evalúa en los otros. Esto se repite varias veces para asegurar que el modelo se evalúe de manera robusta y no se sobreajuste a un único conjunto de datos. La validación cruzada ayuda a obtener una estimación más confiable del rendimiento del modelo.
+
+    En este caso, se utilizó una **validación cruzada de 10 pliegues**, lo que significa que el conjunto de datos se divide en 10 partes, y el modelo se entrena y evalúa 10 veces, asegurando que todas las muestras se utilicen tanto para entrenar como para evaluar el modelo.
+
+3.  **Entrenamiento con Búsqueda de Hiperparámetros:** Durante el proceso de entrenamiento, el modelo se ajusta repetidamente utilizando cada combinación de valores de `C` y `sigma` definida en la malla de hiperparámetros. Cada combinación se evalúa a través de la validación cruzada, y el rendimiento del modelo se calcula para determinar cuál de las combinaciones proporciona el mejor resultado en términos de precisión, recall, o cualquier otra métrica relevante.
+
+4.  **Paralelización del Proceso:** Dado que el proceso de búsqueda de hiperparámetros puede ser computacionalmente costoso, especialmente cuando se utiliza validación cruzada con múltiples combinaciones de parámetros, **paralelización** es una técnica clave para acelerar el proceso. Mediante la paralelización, se distribuyen las cargas de trabajo entre múltiples núcleos del procesador, lo que permite que las pruebas de diferentes combinaciones de hiperparámetros se realicen simultáneamente, reduciendo significativamente el tiempo total de ejecución.
+
+5.  **Selección de la Mejor Combinación de Hiperparámetros:** Una vez que se completa la búsqueda, se selecciona el conjunto de hiperparámetros que ha mostrado el mejor rendimiento en términos de la métrica de evaluación. El modelo final es entrenado utilizando esta combinación óptima de parámetros y se utiliza para hacer predicciones sobre nuevos datos.
+
+6.  **Liberación de Recursos del Sistema:** Después de completar el proceso de entrenamiento y selección del modelo, es importante liberar los recursos del sistema que se utilizaron para la paralelización. Esto implica cerrar el clúster de núcleos y volver al modo secuencial para evitar sobrecargar el sistema.
+
+```{r}
+library(caret)
+library(e1071)
+library(doParallel)  # Para paralelización
+
+# 1  Configurar los núcleos para paralelización
+num_cores <- detectCores() - 2  # Dejar 2 núcleos libres para evitar bloqueos
+cl <- makeCluster(num_cores)  # Crear clúster
+registerDoParallel(cl)  # Activar paralelización
+
+# 1 Definir la malla de hiperparámetros correctamente
+tune_grid <- expand.grid(
+  sigma = c(0.0001, 0.001, 0.01, 0.1, 1),  # Cambiar 'gamma' por 'sigma'
+  C = c(0.01, 0.1, 1, 10)
+)
+
+# 2  Configurar validación cruzada con paralelización
+train_control <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+
+# 3 Registrar el tiempo de inicio
+start_time <- Sys.time()
+
+# 4 Entrenar el modelo SVM con Grid Search paralelizado
+svm_tune <- train(ActivityType ~ ., data = train_data, 
+                   method = "svmRadial",
+                   trControl = train_control,
+                   tuneGrid = tune_grid,
+                   class.weights = class_weights_combined)
+
+# 5 Registrar el tiempo de fin
+end_time <- Sys.time()
+
+# Calcular el tiempo total de entrenamiento
+training_time <- end_time - start_time
+cat("Tiempo total de entrenamiento SVM con Grid Search:", training_time, "\n")
+
+# 6 Apagar el clúster después del entrenamiento
+stopCluster(cl)
+registerDoSEQ()  # Volver al modo secuencial normal
+```
+
+```{r}
+# 6 Imprimir los mejores hiperparámetros
+print(svm_tune$bestTune)
+
+# 7 Visualizar resultados de Grid Search
+plot(svm_tune)
+
+```
+
+```{r}
+library(viridis)
+
+# 9 **Heatmap de Accuracy en función de C y Sigma para SVM Radial**
+# Ordenar resultados por accuracy
+tune_results_radial <- svm_tune$results %>% 
+  select(C, sigma, Accuracy) %>% 
+  arrange(desc(Accuracy))
+
+# Crear Heatmap con colores equilibrados y etiquetas adaptadas al fondo
+ggplot(tune_results_radial, aes(x = factor(sigma), y = factor(C), fill = Accuracy)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "cividis", direction = -1, name = "Accuracy") +  
+  geom_text(aes(label = round(Accuracy, 4), 
+                color = ifelse(Accuracy > 0.7, "black", "white")), 
+            size = 5, fontface = "bold") +  # Tamaño más grande para mayor visibilidad
+  scale_color_manual(values = c("white", "black"), guide = "none") +  
+  labs(title = "Accuracy en función de C y Sigma (SVM Radial)",
+       x = "Sigma",
+       y = "C") +
+  theme_minimal(base_size = 14) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# Capturar el tiempo de inicio del entrenamiento
+start_train_time <- Sys.time()
+
+# Extraer los mejores hiperparámetros encontrados en Grid Search
+best_C <- svm_tune$bestTune$C
+best_gamma <- svm_tune$bestTune$sigma
+
+# Entrenar el modelo final con los mejores hiperparámetros
+svm_final <- svm(ActivityType ~ ., data = train_data, kernel = "radial",
+                 cost = 10, gamma = 0.01, class.weights = class_weights_combined)
+
+# Capturar el tiempo de finalización del entrenamiento
+end_train_time <- Sys.time()
+train_duration <- end_train_time - start_train_time
+
+# Capturar el tiempo de inicio de la predicción
+start_pred_time <- Sys.time()
+
+# Hacer predicciones en el conjunto de prueba 
+pred_final <- predict(svm_final, test_data)
+
+# Capturar el tiempo de finalización de la predicción
+end_pred_time <- Sys.time()
+pred_duration <- end_pred_time - start_pred_time
+
+# Imprimir los tiempos de ejecución
+print(paste("Tiempo de entrenamiento:", train_duration))
+print(paste("Tiempo de predicción:", pred_duration))
+
+```
+
+```{r}
+# Evaluar modelo con Matriz de Confusión
+conf_matrix <- confusionMatrix(pred_final, test_data$ActivityType)
+
+# Mostrar matriz de confusión
+print(conf_matrix)
+
+# Extraer métricas específicas
+precision <- conf_matrix$byClass[, "Pos Pred Value"]  # Precisión por clase
+recall <- conf_matrix$byClass[, "Sensitivity"]        # Recall por clase
+f1_score <- 2 * (precision * recall) / (precision + recall)  # F1-score
+
+# Mostrar resultados
+print(data.frame(Class = levels(test_data$ActivityType),
+                 Precision = precision,
+                 Recall = recall,
+                 F1_Score = f1_score))
+```
+
+```{r}
+library(ggplot2)
+library(ggfortify)
+
+# Generar predicciones en los datos de prueba
+pred <- predict(svm_final, test_data)
+
+# Asegurar que test_data solo tiene variables numéricas antes de PCA
+test_data_numeric <- test_data %>%
+  select(-ActivityType) %>%
+  mutate_if(is.character, as.numeric)  # Convertir caracteres a numéricos si es necesario
+
+# Aplicar PCA a los datos de prueba
+pca_result <- prcomp(test_data_numeric, scale. = TRUE)
+
+# Crear un dataframe con los resultados del PCA y las predicciones del modelo
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1], 
+  PC2 = pca_result$x[, 2], 
+  Predicción = pred_final,  # Agregamos la predicción del modelo
+  Clase_Real = test_data$ActivityType  # Agregamos la clase real
+)
+
+# Graficar PCA con clases reales
+autoplot(pca_result, data = test_data, colour = "ActivityType") +
+  labs(title = "Separación de Clases con PCA en SVM - Clases Reales")
+
+# Graficar PCA con predicciones del modelo combinado
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Predicción, shape = Clase_Real)) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Separación de Clases con PCA en SVM - Peso Combinado - Mejor Parametro",
+       x = "PC1",
+       y = "PC2") +
+  theme_minimal()
+
+```
+
+```{r}
+library(caret)
+library(e1071)
+
+# Realizar predicciones en los datos de entrenamiento y prueba
+y_train_pred <- predict(svm_final, newdata = train_data)
+y_pred <- predict(svm_final, newdata = test_data)
+
+# Evaluar el accuracy en el conjunto de entrenamiento
+accuracy_train <- mean(y_train_pred == train_data$ActivityType)
+cat("Accuracy en los datos de entrenamiento:", accuracy_train, "\n")
+
+# Evaluar el accuracy en el conjunto de prueba
+accuracy_test <- mean(y_pred == test_data$ActivityType)
+cat("Accuracy en los datos de prueba:", accuracy_test, "\n")
+
+# Comparar la diferencia en accuracy entre entrenamiento y prueba
+if (accuracy_train > accuracy_test) {
+  cat("El modelo podría estar sobreajustando (overfitting).\n")
+}
+
+# Realizar validación cruzada en el conjunto de entrenamiento
+cv_control <- trainControl(method = "cv", number = 5)  # 5-fold cross-validation
+cv_model <- train(ActivityType ~ ., data = train_data, method = "svmRadial", trControl = cv_control)
+cv_scores <- cv_model$resample$Accuracy
+cat("Accuracy promedio con validación cruzada en entrenamiento:", mean(cv_scores), "\n")
+
+# Mostrar la matriz de confusión
+conf_matrix <- confusionMatrix(y_pred, test_data$ActivityType)
+cat("\nMatriz de confusión:\n")
+print(conf_matrix)
+
+# Extraer métricas específicas de la matriz de confusión
+precision <- conf_matrix$byClass[, "Pos Pred Value"]
+recall <- conf_matrix$byClass[, "Sensitivity"]
+f1 <- conf_matrix$byClass[, "F1"]
+
+# Crear un dataframe con las métricas
+metrics_df <- data.frame(
+    'Class' = rownames(conf_matrix$byClass),
+    'Precision' = precision,
+    'Recall' = recall,
+    'F1_Score' = f1
+)
+
+# Mostrar las métricas por clase
+print("\nMétricas por clase:")
+print(metrics_df)
+```
+
+```{r}
+# Guardar el modelo entrenado
+save(svm_final, file = "svm_model_combined.RData")
+```
+
+# 5. Resultados:
+
+Con los resultados obtenidos, es claro que la inclusión de las nuevas variables, como la **aceleración absoluta**, la **combinación de roll y yaw**, y la **combinación de aceleración con los ángulos** contribuyó de manera significativa a la mejora del modelo.
+
+La **precisión global** del modelo alcanzó un impresionante 99.8%, con un **Kappa** de 1, lo que indica una concordancia excelente entre las predicciones y las clases reales. Estos resultados son una clara mejora en comparación con modelos previos. La matriz de confusión muestra que el modelo logró clasificar correctamente casi todas las instancias, incluyendo clases como **Avión**, que previamente había presentado mayores dificultades.
+
+Las métricas de **precision**, **recall** y **F1-Score** para todas las clases fueron excelentes, alcanzando un valor de **1.000** para casi todas las clases, lo que demuestra que las nuevas variables han mejorado notablemente la capacidad del modelo para distinguir entre las diferentes actividades, incluso aquellas con menos representaciones en los datos.
+
+Además, los **pesos combinados** optimizados contribuyeron a manejar el desbalance entre clases, especialmente para clases minoritarias como **Avión**, que ahora se clasifica con mayor precisión sin sacrificar el rendimiento en las clases mayoritarias como **Coche urbano**.
+
+La optimización de los hiperparámetros también jugó un papel crucial, seleccionando valores de **C = 10** y **gamma = 0.01** que ofrecieron el mejor equilibrio entre ajuste y generalización, evitando el sobreajuste que ocurrió con combinaciones más extremas de estos parámetros.
+
+Los resultados obtenidos también se reflejan en la **gráfica de PCA** que muestra claramente cómo las nuevas variables mejoran la separación de las clases en el espacio reducido de dos componentes principales (PC1 y PC2). La separación entre las clases es mucho más nítida y definida, lo que sugiere que el modelo es ahora capaz de diferenciar mejor entre las diferentes actividades
+
+En resumen, la combinación de nuevas variables de aceleración y orientación, junto con un ajuste preciso de los pesos y parámetros, resultó en un modelo SVM más robusto y preciso, mejorando especialmente la clasificación de clases minoritarias sin comprometer la precisión general.
+
+## Tabla Resumen de SVM - Kernel Radial:
+
+![](images/clipboard-558285899.png)
