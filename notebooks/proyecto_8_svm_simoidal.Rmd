@@ -37,6 +37,12 @@ Para lograr esto, se cuenta con un conjunto de datos que incluye:
 
 ### Objetivo Notebook:
 
+-   Evaluar el rendimiento del modelo Support Vector Machine (SVM) con diferentes configuraciones del kernel Simoidal.
+
+-   Optimizar el modelo SVM mediante la búsqueda de hiperparámetros.
+
+-   Generar predicciones utilizando el conjunto de test 1.
+
 # **1. Carga de librerías**
 
 ```{r}
@@ -444,7 +450,7 @@ En el proceso de desarrollo del modelo para la clasificación del tipo de transp
 
     -   En **Python**, el balanceo de clases se manejó de forma automática mediante el parámetro `class_weight='balanced'` en el modelo SVM, lo que permitió que el modelo prestara más atención a las clases minoritarias, optimizando el rendimiento para esas clases. Esta característica está integrada en **`scikit-learn`** y facilita el manejo de datasets desbalanceados sin necesidad de ajustes manuales.
 
-    -   En **R**, aunque se utilizó **SMOTE** y se ajustaron **pesos manuales** para balancear las clases, el proceso no fue tan automático como en Python. En **R**, el ajuste manual de los **pesos de clase** o el uso de **SMOTE** requiere intervención explícita, y los resultados mostraron que el modelo podría no haber aprovechado completamente estas técnicas, lo que resultó en un rendimiento inferior en los datos de prueba.
+    -   En **R**, aunque se utilizó **peso inverso** y se ajustaron **pesos manuales** para balancear las clases, el proceso no fue tan automático como en Python. En **R**, el ajuste manual de los **pesos de clase** requiere intervención explícita, y los resultados mostraron que el modelo podría no haber aprovechado completamente estas técnicas, lo que resultó en un rendimiento inferior en los datos de prueba.
 
 El modelo de **SVM con kernel sigmoidal** mostró diferencias de rendimiento entre **R** y **Python** debido a varios factores. En **Python**, la **búsqueda de hiperparámetros** con **`GridSearchCV`** y el **balanceo automático de clases** mediante `class_weight='balanced'` optimizaron el rendimiento, lo que resultó en un **accuracy del 100%** tanto en los datos de entrenamiento como en los de prueba. Además, la capacidad de **paralelización** y optimización de **scikit-learn** permitió un ajuste eficiente.
 
